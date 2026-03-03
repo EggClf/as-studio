@@ -7,7 +7,6 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/client/package.json ./packages/client/
 COPY packages/server/package.json ./packages/server/
-COPY packages/shared/package.json ./packages/shared/
 
 # Install dependencies (cached unless package files change)
 RUN npm ci
