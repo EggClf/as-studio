@@ -291,7 +291,7 @@
             "data-view-title": "数据视图",
             "run-table-description": "该项目所有的运行实例将会显示在该表中",
             "run-table-title": "运行实例",
-            "textarea-description": "连接 AgentScope Studio 后，应用中 UserAgent 的用户输入操作将被转移到该输入框",
+            "textarea-description": "连接 VULCAN 后，应用中 UserAgent 的用户输入操作将被转移到该输入框",
             "textarea-title": "对话输入",
             "send-description": "当应用运行到需要 UserAgent 实例进行输入时，该按钮将激活，点击按钮扮演对应的角色进行输入",
             "send-title": "发送消息"

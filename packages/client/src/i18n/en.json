@@ -110,7 +110,7 @@
             "metadata": "The tracing span metadata for additional information",
             "output": "The tracing span output"
         },
-        "friday": "A local deployed agent that helps you with your daily tasks and answer your questions about AgentScope"
+        "friday": "A local deployed agent that helps you with your daily tasks and answer your questions about Vulcan"
     },
     "error": {
         "empty-input": "Input cannot be empty",
@@ -297,7 +297,7 @@
             "data-view-title": "Data View",
             "run-table-description": "The run instances of the current project will be displayed in this table",
             "run-table-title": "Run Instances",
-            "textarea-description": "Once connected to AgentScope Studio, the user input operations of the UserAgent instances will be transferred to this input box",
+            "textarea-description": "Once connected to VULCAN, the user input operations of the UserAgent instances will be transferred to this input box",
             "textarea-title": "User Input Transfer",
             "send-description": "When user input is required in the application, this button will be activated. Click to send the message in the voice of the corresponding role",
             "send-title": "Send Message"

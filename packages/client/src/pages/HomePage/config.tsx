@@ -1,20 +1,14 @@
 import {
     GlobeIcon,
     DatabaseIcon,
-    BookOpenIcon,
     BotIcon,
     ChartColumnStackedIcon,
     FolderGit2Icon,
     RouteIcon,
-    UnplugIcon,
     Tag,
 } from 'lucide-react';
 import { LucideIcon } from 'lucide-react';
 import { ComponentType, SVGProps } from 'react';
-
-import DingTalkIcon from '@/assets/svgs/dingtalk.svg?react';
-import GitHubIcon from '@/assets/svgs/github.svg?react';
-import DiscordIcon from '@/assets/svgs/discord.svg?react';
 
 import { RouterPath } from '@/pages/RouterPath.ts';
 
@@ -103,41 +97,6 @@ export const getSidebarItems = (t: (key: string) => string): SidebarGroup[] => [
                 title: t('common.friday'),
                 icon: BotIcon,
                 url: RouterPath.FRIDAY,
-            },
-        ],
-    },
-    {
-        title: t('common.document'),
-        items: [
-            {
-                title: t('common.tutorial'),
-                icon: BookOpenIcon,
-                url: RouterPath.TUTORIAL,
-            },
-            {
-                title: t('common.api'),
-                icon: UnplugIcon,
-                url: RouterPath.API,
-            },
-        ],
-    },
-    {
-        title: t('common.contact'),
-        items: [
-            {
-                title: t('common.github'),
-                icon: GitHubIcon,
-                url: RouterPath.GITHUB,
-            },
-            {
-                title: t('common.dingtalk'),
-                icon: DingTalkIcon,
-                url: RouterPath.DINGTALK,
-            },
-            {
-                title: t('common.discord'),
-                icon: DiscordIcon,
-                url: RouterPath.DISCORD,
             },
         ],
     },
