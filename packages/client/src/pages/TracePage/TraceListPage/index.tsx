@@ -1,5 +1,12 @@
 import { TableColumnsType } from 'antd';
-import { CheckCircle2Icon, CopyIcon, InfoIcon } from 'lucide-react';
+import {
+    ActivityIcon,
+    CheckCircle2Icon,
+    ClockIcon,
+    CopyIcon,
+    HashIcon,
+    XCircleIcon,
+} from 'lucide-react';
 import { Key, memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -26,49 +33,48 @@ import {
 import { Trace } from '@shared/types';
 import TraceDetailPage from '../TraceDetailPage';
 
-// Helper component for statistic cards
+// Helper component for statistic cards with icon
 const StatCard = ({
     title,
     value,
     unit,
     icon,
+    iconColorClass,
 }: {
     title: string;
     value: number | string | undefined;
     unit?: string;
     icon?: React.ReactNode;
+    iconColorClass?: string;
 }) => {
     return (
-        <div className="border border-border rounded-lg p-4 flex flex-col gap-2 shadow-sm">
-            <div className="flex items-center gap-2">
-                <span className="text-[14px] font-medium text-muted-foreground">
+        <div className="border border-border rounded-lg p-4 flex items-start gap-3 shadow-sm">
+            {icon && (
+                <div className={`flex items-center justify-center size-9 rounded-md shrink-0 ${iconColorClass || 'bg-primary/10'}`}>
+                    {icon}
+                </div>
+            )}
+            <div className="flex flex-col gap-1 min-w-0">
+                <span className="text-[13px] font-medium text-muted-foreground">
                     {title}
                 </span>
-                {icon && (
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <InfoIcon className="size-3 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent>{title}</TooltipContent>
-                    </Tooltip>
-                )}
-            </div>
-            <div className="flex items-baseline gap-1">
-                {typeof value === 'number' ? (
-                    <NumberCounter
-                        number={value}
-                        style={{ fontSize: 20, fontWeight: 700 }}
-                    />
-                ) : (
-                    <span style={{ fontSize: 20, fontWeight: 700 }}>
-                        {value || '-'}
-                    </span>
-                )}
-                {unit && (
-                    <span className="text-[12px] text-muted-foreground">
-                        {unit}
-                    </span>
-                )}
+                <div className="flex items-baseline gap-1">
+                    {typeof value === 'number' ? (
+                        <NumberCounter
+                            number={value}
+                            style={{ fontSize: 22, fontWeight: 700 }}
+                        />
+                    ) : (
+                        <span style={{ fontSize: 22, fontWeight: 700 }} className="tabular-nums">
+                            {value || '-'}
+                        </span>
+                    )}
+                    {unit && (
+                        <span className="text-[12px] text-muted-foreground">
+                            {unit}
+                        </span>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -297,11 +303,15 @@ const TraceListPage = () => {
                     title={t('common.total')}
                     value={statistics?.totalTraces}
                     unit={t('unit.times')}
+                    icon={<ActivityIcon className="size-4 text-blue-500" />}
+                    iconColorClass="bg-blue-500/10"
                 />
                 <StatCard
                     title={t('common.total-tokens')}
                     value={statistics?.totalTokens}
                     unit={t('unit.tokens')}
+                    icon={<HashIcon className="size-4 text-purple-500" />}
+                    iconColorClass="bg-purple-500/10"
                 />
                 <StatCard
                     title={`${t('common.average')} ${t('common.latency')}`}
@@ -316,12 +326,15 @@ const TraceListPage = () => {
                             ? 'ms'
                             : 's'
                     }
+                    icon={<ClockIcon className="size-4 text-amber-500" />}
+                    iconColorClass="bg-amber-500/10"
                 />
             </div>
 
             {error && (
-                <div className="text-destructive p-4 bg-destructive/10 rounded-md">
-                    {t('trace.message.loadFailed')}: {error.message}
+                <div className="flex items-center gap-2 text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
+                    <XCircleIcon className="size-4 shrink-0" />
+                    <span className="text-sm">{t('trace.message.loadFailed')}: {error.message}</span>
                 </div>
             )}
 

@@ -81,18 +81,18 @@ const StudioSidebar = () => {
                         <SidebarMenuButton
                             size="lg"
                             asChild
-                            tooltip="AgentScope Studio"
+                            tooltip="VULCAN – Viettel Unified Logic & Control for Autonomous Network"
                         >
                             <a href="#">
-                                <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
+                                <div className="text-white flex aspect-square size-8 items-center justify-center rounded-lg" style={{ backgroundColor: '#EE0434' }}>
                                     <Command className="size-4" />
                                 </div>
                                 <div className="grid flex-1 text-left text-sm leading-tight">
                                     <span className="truncate font-medium">
-                                        AgentScope
+                                        VULCAN
                                     </span>
                                     <span className="truncate text-xs">
-                                        Studio
+                                        Autonomous Network
                                     </span>
                                 </div>
                             </a>

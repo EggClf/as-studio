@@ -3,13 +3,17 @@ FROM node:22-slim AS builder
 
 WORKDIR /app
 
-# Copy workspace files
-COPY packages/ ./packages/
+# Copy only package files first (for better caching)
 COPY package.json package-lock.json ./
+COPY packages/client/package.json ./packages/client/
+COPY packages/server/package.json ./packages/server/
+COPY packages/shared/package.json ./packages/shared/
 
-# Install dependencies
+# Install dependencies (cached unless package files change)
 RUN npm ci
 
+# Copy source code (changes here won't invalidate npm ci cache)
+COPY packages/ ./packages/
 COPY bin/ ./bin/
 
 # Build the application
