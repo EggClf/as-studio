@@ -11,7 +11,8 @@ const VulcanPage = () => {
     const [loading, setLoading] = useState(true);
     const [selectedModel] = useState<ModelType>('ES');
     const [selectedCell, setSelectedCell] = useState<CellFeatures | null>(null);
-    const [selectedDate] = useState<Date>(() => new Date());
+    // TODO: revert to new Date() when switching to live data
+    const [selectedDate] = useState<Date>(() => new Date('2026-02-04T10:00:00'));
 
     const loadCells = useCallback(async () => {
         setLoading(true);

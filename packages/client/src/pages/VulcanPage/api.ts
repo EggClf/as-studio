@@ -1,8 +1,8 @@
 /**
  * Vulcan API — Context Snapshot & Network Scan services.
  *
- * Uses the same base URL convention as the legacy app but reads from
- * VITE_API_URL (proxied through vite.config or direct in production).
+ * Default backend: http://172.16.28.63:8099
+ * Override via VITE_VULCAN_API_URL in your .env file.
  */
 
 import type {
@@ -14,8 +14,7 @@ import type {
 
 const API_BASE =
     import.meta.env.VITE_VULCAN_API_URL ||
-    import.meta.env.VITE_API_URL ||
-    '/api/vulcan';
+    'http://172.16.28.63:8099';
 
 const SCAN_BASE =
     import.meta.env.VITE_NETWORK_SCAN_URL || `${API_BASE}/network-scan/scan`;
@@ -59,16 +58,21 @@ function formatDate(d: Date) {
     return `${y}-${m}-${day}`;
 }
 
+// TODO: remove hardcoded fallback when switching to live data
+const DEFAULT_TIMESTAMP = '2026-02-04T10:00:00';
+
 export async function fetchNetworkScan(
     date?: Date,
 ): Promise<NetworkScanData> {
-    const dateStr = formatDate(date ?? new Date());
+    const timestamp = date
+        ? `${formatDate(date)}T10:00:00`
+        : DEFAULT_TIMESTAMP;
 
     const res = await fetch(SCAN_BASE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            timestamp: `${dateStr}T10:00:00`,
+            timestamp,
             enable_web_search: false,
         }),
     });
