@@ -4,6 +4,7 @@ import {
     BotIcon,
     ChartColumnStackedIcon,
     FolderGit2Icon,
+    RadioIcon,
     RouteIcon,
     Tag,
 } from 'lucide-react';
@@ -97,6 +98,16 @@ export const getSidebarItems = (t: (key: string) => string): SidebarGroup[] => [
                 title: t('common.friday'),
                 icon: BotIcon,
                 url: RouterPath.FRIDAY,
+            },
+        ],
+    },
+    {
+        title: t('common.network'),
+        items: [
+            {
+                title: t('common.vulcan'),
+                icon: RadioIcon,
+                url: RouterPath.VULCAN,
             },
         ],
     },

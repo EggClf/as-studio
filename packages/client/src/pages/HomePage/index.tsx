@@ -14,6 +14,7 @@ import { OverviewRoomContextProvider } from '@/context/OverviewRoomContext.tsx';
 import { StudioSidebarProvider } from '@/context/SidebarContext.tsx';
 import StudioSidebar from '@/pages/HomePage/sidebar.tsx';
 import TracePage from '../TracePage/index.tsx';
+import VulcanPage from '../VulcanPage';
 
 const HomePage = () => {
     const { t } = useTranslation();
@@ -78,6 +79,10 @@ const HomePage = () => {
                     <Route
                         path={`${RouterPath.FRIDAY}/*`}
                         element={<FridayPage />}
+                    />
+                    <Route
+                        path={`${RouterPath.VULCAN}/*`}
+                        element={<VulcanPage />}
                     />
                     <Route
                         path="*"
