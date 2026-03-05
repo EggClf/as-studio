@@ -8,18 +8,23 @@ COPY package.json package-lock.json ./
 COPY packages/client/package.json ./packages/client/
 COPY packages/server/package.json ./packages/server/
 
-# Install dependencies (cached unless package files change)
-RUN npm ci
+# Install dependencies with cache mount (survives across builds)
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 
-# Copy source code (changes here won't invalidate npm ci cache)
-COPY packages/ ./packages/
+# Copy source code per-package so changing client doesn't invalidate server cache
+COPY packages/server/ ./packages/server/
+COPY packages/shared/ ./packages/shared/
+COPY packages/app/ ./packages/app/
 COPY bin/ ./bin/
+COPY packages/client/ ./packages/client/
 
 # Build the application
 RUN npm run build
 
 # Reinstall production dependencies only
-RUN npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev
 
 # Stage 2: Runtime with Python + Node.js
 FROM python:3.10-slim
@@ -38,20 +43,16 @@ COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 WORKDIR /app
 
-# Copy built artifacts from builder
+# Install Python deps BEFORE copying dist (rarely changes, avoids re-install on client edits)
+COPY packages/app/requirements.txt /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+# Copy built artifacts from builder (changes on every client edit — keep last)
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
-
-# Copy Python requirements and install
-COPY packages/app/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt \
-    && pip cache purge \
-    && rm /tmp/requirements.txt
-
-# Cleanup
-RUN npm cache clean --force 2>/dev/null || true \
-    && rm -rf ~/.npm/_cacache
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /entrypoint.sh

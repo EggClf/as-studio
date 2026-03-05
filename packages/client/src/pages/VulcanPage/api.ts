@@ -7,6 +7,7 @@
 
 import type {
     ContextSnapshotResponse,
+    ContextSnapshotRow,
     NetworkScanData,
     SystemScanEvent,
     SystemScanRequest,
@@ -19,34 +20,92 @@ const API_BASE =
 const SCAN_BASE =
     import.meta.env.VITE_NETWORK_SCAN_URL || `${API_BASE}/network-scan/scan`;
 
-// ── Context Snapshot ────────────────────────────────────
+// ── Context Snapshot (via system-scan/stream) ───────────
 
 export async function fetchContextSnapshot(
-    page = 1,
-    pageSize = 20,
+    _page = 1,
+    _pageSize = 20,
     cellName?: string,
-    startTime?: string,
-    endTime?: string,
+    _startTime?: string,
+    _endTime?: string,
 ): Promise<ContextSnapshotResponse> {
-    const params = new URLSearchParams({
-        page: String(page),
-        page_size: String(pageSize),
-    });
-    if (cellName) params.set('cell_name', cellName);
-    if (startTime) params.set('start_time', startTime);
-    if (endTime) params.set('end_time', endTime);
-
-    const res = await fetch(`${API_BASE}/context-snapshot/data?${params}`, {
-        headers: { accept: 'application/json' },
-    });
-
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(
-            err.detail || `Context snapshot failed: ${res.status}`,
-        );
+    if (!cellName) {
+        return { total: 0, page: 1, page_size: _pageSize, columns: [], data: [] };
     }
-    return res.json();
+
+    const body: SystemScanRequest = {
+        task_type: 'MRO',
+        cells: [cellName],
+        timestamp: _startTime
+            ? new Date(_startTime).toISOString()
+            : new Date().toISOString(),
+        enable_web_search: false,
+        save_to_db: false,
+    };
+
+    const res = await fetch(`${API_BASE}/system-scan/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+
+    if (!res.ok || !res.body) {
+        throw new Error(`Context snapshot (system-scan) failed: ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let payload: Record<string, unknown> | undefined;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop() ?? '';
+
+        for (const chunk of chunks) {
+            const line = chunk.replace(/^data:\s*/, '').trim();
+            if (!line) continue;
+            try {
+                const evt = JSON.parse(line) as SystemScanEvent;
+                if (evt.type === 'done' && evt.payload) {
+                    payload = evt.payload;
+                }
+            } catch {
+                /* skip malformed */
+            }
+        }
+    }
+
+    if (!payload) {
+        return { total: 0, page: 1, page_size: _pageSize, columns: [], data: [] };
+    }
+
+    // Normalise the payload into ContextSnapshotResponse
+    if (Array.isArray(payload.data)) {
+        const rows = payload.data as ContextSnapshotRow[];
+        const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+        return {
+            total: rows.length,
+            page: 1,
+            page_size: rows.length,
+            columns,
+            data: rows,
+        };
+    }
+
+    // Single-object payload — wrap as one row
+    const columns = Object.keys(payload);
+    return {
+        total: 1,
+        page: 1,
+        page_size: 1,
+        columns,
+        data: [payload as unknown as ContextSnapshotRow],
+    };
 }
 
 // ── Network Scan ────────────────────────────────────────

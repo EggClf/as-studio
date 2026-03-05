@@ -1,0 +1,7 @@
+curl -X POST http://172.16.28.63:8099/system-scan/stream  -H "Content-Type: application/json"  -d '{
+    "task_type": "MRO",
+    "cells": ["gHM00356_10n411", "gHM00356_20n411", "gHM00356_30n411"],
+    "timestamp": "2026-02-04T10:00:00",
+    "enable_web_search": false,
+    "save_to_db": false
+}'
