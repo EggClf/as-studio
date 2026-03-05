@@ -1,27 +1,24 @@
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
     ChevronDown,
-    ChevronLeft,
-    ChevronRight,
     ChevronUp,
     Database,
     Eye,
     Loader2,
-    SearchIcon,
+    RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
     Dialog,
     DialogContent,
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { fetchContextSnapshot } from './api';
-import type { ContextSnapshotResponse, ContextSnapshotRow } from './types';
+import { streamSystemScan, formatTimestamp } from './api';
+import type { SystemScanEvent, SystemScanRequest } from './types';
 
 // ── constants ───────────────────────────────────────────
 
@@ -97,103 +94,6 @@ function themeFor(col: string) {
 
 // ── sub-components ──────────────────────────────────────
 
-const MAX_INLINE_KEYS = 4;
-
-const JsonChips = ({
-    value,
-    column,
-    onExpand,
-}: {
-    value: unknown;
-    column: string;
-    onExpand: () => void;
-}) => {
-    const parsed = tryParseJson(value);
-    const t = themeFor(column);
-
-    if (!parsed) {
-        const s = String(value ?? '');
-        if (!s)
-            return (
-                <span className="text-muted-foreground/50 italic text-xs">
-                    —
-                </span>
-            );
-        return (
-            <span
-                className="text-xs text-foreground/70 truncate block max-w-[220px]"
-                title={s}
-            >
-                {s}
-            </span>
-        );
-    }
-
-    const entries = Object.entries(parsed);
-    const shown = entries.slice(0, MAX_INLINE_KEYS);
-    const remaining = entries.length - shown.length;
-
-    return (
-        <div className="flex flex-wrap gap-1 items-center max-w-[320px]">
-            {shown.map(([k, v]) => (
-                <span
-                    key={k}
-                    className={cn(
-                        'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] leading-tight border',
-                        t.badge,
-                        t.border,
-                    )}
-                    title={`${k}: ${JSON.stringify(v)}`}
-                >
-                    <span className="font-semibold opacity-70">{k}:</span>
-                    <span className="font-mono">{formatValue(v)}</span>
-                </span>
-            ))}
-            {remaining > 0 && (
-                <button
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onExpand();
-                    }}
-                    className={cn(
-                        'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] leading-tight border hover:opacity-80 cursor-pointer',
-                        t.badge,
-                        t.border,
-                    )}
-                >
-                    +{remaining} more
-                </button>
-            )}
-        </div>
-    );
-};
-
-const CellValue = ({
-    value,
-    column,
-    onExpand,
-}: {
-    value: unknown;
-    column: string;
-    onExpand: () => void;
-}) => {
-    if (value == null || value === '')
-        return (
-            <span className="text-muted-foreground/50 italic text-xs">—</span>
-        );
-    if (JSON_COLUMNS.has(column))
-        return <JsonChips value={value} column={column} onExpand={onExpand} />;
-    const s = String(value);
-    return (
-        <span
-            className="text-sm text-foreground truncate block max-w-[200px]"
-            title={s}
-        >
-            {s}
-        </span>
-    );
-};
-
 /** Full key-value detail — rendered inside a Dialog */
 const JsonDetailContent = ({
     column,
@@ -256,63 +156,180 @@ const JsonDetailContent = ({
     );
 };
 
-/** Expanded row showing all JSON fields inline */
-const ExpandedRow = ({
-    row,
-    columns,
+/** Render a JSON object as collapsible key-value card */
+const JsonCard = ({
+    label,
+    value,
+    onExpandDetail,
 }: {
-    row: ContextSnapshotRow;
-    columns: string[];
+    label: string;
+    value: unknown;
+    onExpandDetail: (col: string, val: string) => void;
 }) => {
-    const jsonCols = columns.filter((c) => JSON_COLUMNS.has(c));
+    const [open, setOpen] = useState(false);
+    const parsed = tryParseJson(value);
+    const t = themeFor(label);
+
+    if (!parsed) return null;
+
+    const entries = Object.entries(parsed);
 
     return (
-        <tr>
-            <td colSpan={columns.length + 2} className="px-4 py-3 bg-muted/40">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {jsonCols.map((col) => {
-                        const parsed = tryParseJson(row[col]);
-                        const t = themeFor(col);
-                        if (!parsed) return null;
-
-                        return (
-                            <div
-                                key={col}
-                                className={cn(
-                                    'rounded-lg border p-3',
-                                    t.border,
-                                    'bg-card',
-                                )}
-                            >
-                                <p
-                                    className={cn(
-                                        'text-xs font-bold uppercase tracking-wider mb-2',
-                                        t.text,
-                                    )}
-                                >
-                                    {col.replace(/_/g, ' ')}
-                                </p>
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                                    {Object.entries(parsed).map(([k, v]) => (
-                                        <div
-                                            key={k}
-                                            className="flex items-baseline gap-1.5"
-                                        >
-                                            <span className="text-[11px] text-muted-foreground font-medium truncate">
-                                                {k}:
-                                            </span>
-                                            <span className="text-[12px] font-mono text-foreground">
-                                                {formatValue(v)}
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        );
-                    })}
+        <div className={cn('rounded-lg border p-3', t.border, 'bg-card')}>
+            <button
+                className="flex items-center justify-between w-full text-left"
+                onClick={() => setOpen((p) => !p)}
+            >
+                <span
+                    className={cn(
+                        'text-xs font-bold uppercase tracking-wider',
+                        t.text,
+                    )}
+                >
+                    {label.replace(/_/g, ' ')}
+                </span>
+                <div className="flex items-center gap-1">
+                    <Badge
+                        variant="outline"
+                        className={cn('text-[10px]', t.badge)}
+                    >
+                        {entries.length} fields
+                    </Badge>
+                    {open ? (
+                        <ChevronUp className="size-3.5 text-muted-foreground" />
+                    ) : (
+                        <ChevronDown className="size-3.5 text-muted-foreground" />
+                    )}
                 </div>
-            </td>
-        </tr>
+            </button>
+            {open && (
+                <div className="mt-2 space-y-1">
+                    {entries.map(([k, v]) => (
+                        <div
+                            key={k}
+                            className="flex items-baseline gap-1.5 text-[12px]"
+                        >
+                            <span className="text-muted-foreground font-medium truncate min-w-0 shrink-0">
+                                {k}:
+                            </span>
+                            <span className="font-mono text-foreground truncate">
+                                {typeof v === 'object' && v !== null
+                                    ? JSON.stringify(v)
+                                    : formatValue(v)}
+                            </span>
+                        </div>
+                    ))}
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-[11px] mt-1"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onExpandDetail(label, String(value));
+                        }}
+                    >
+                        <Eye className="size-3 mr-1" />
+                        View full detail
+                    </Button>
+                </div>
+            )}
+        </div>
+    );
+};
+
+/** Streaming event row in the timeline */
+const EventRow = ({ event }: { event: SystemScanEvent }) => {
+    const bgClass =
+        event.type === 'error'
+            ? 'bg-destructive/10 border-destructive/20'
+            : event.type === 'done'
+              ? 'bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800'
+              : 'bg-muted/50 border-border/50';
+
+    return (
+        <div
+            className={cn(
+                'flex items-start gap-2 px-3 py-2 rounded-md border text-sm',
+                bgClass,
+            )}
+        >
+            <span className="shrink-0 text-base leading-none mt-0.5">
+                {event.icon}
+            </span>
+            <span className="text-xs leading-relaxed text-foreground/80">
+                {event.text}
+            </span>
+        </div>
+    );
+};
+
+/** Render the final payload from the done event */
+const PayloadResult = ({
+    payload,
+    onExpandDetail,
+}: {
+    payload: Record<string, unknown>;
+    onExpandDetail: (col: string, val: string) => void;
+}) => {
+    // Separate JSON-like fields from plain fields
+    const entries = Object.entries(payload);
+    const jsonEntries: [string, unknown][] = [];
+    const plainEntries: [string, unknown][] = [];
+
+    for (const [k, v] of entries) {
+        if (JSON_COLUMNS.has(k) || tryParseJson(v) !== null) {
+            jsonEntries.push([k, v]);
+        } else {
+            plainEntries.push([k, v]);
+        }
+    }
+
+    return (
+        <div className="flex flex-col gap-3">
+            {/* Plain fields */}
+            {plainEntries.length > 0 && (
+                <div className="rounded-lg border border-border bg-card p-3">
+                    <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                        Summary
+                    </p>
+                    <div className="space-y-1">
+                        {plainEntries.map(([k, v]) => {
+                            // Render arrays as comma-joined
+                            const display = Array.isArray(v)
+                                ? v.length > 0
+                                    ? v.join(', ')
+                                    : '(none)'
+                                : v != null && typeof v === 'object'
+                                  ? JSON.stringify(v)
+                                  : formatValue(v);
+                            return (
+                                <div
+                                    key={k}
+                                    className="flex items-baseline gap-1.5 text-[12px]"
+                                >
+                                    <span className="text-muted-foreground font-medium shrink-0">
+                                        {k.replace(/_/g, ' ')}:
+                                    </span>
+                                    <span className="font-mono text-foreground truncate">
+                                        {display}
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* JSON fields as collapsible cards */}
+            {jsonEntries.map(([k, v]) => (
+                <JsonCard
+                    key={k}
+                    label={k}
+                    value={v}
+                    onExpandDetail={onExpandDetail}
+                />
+            ))}
+        </div>
     );
 };
 
@@ -324,334 +341,161 @@ interface Props {
 }
 
 const ContextSnapshotPanel = ({ cellName, selectedDate }: Props) => {
-    const [data, setData] = useState<ContextSnapshotResponse | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [events, setEvents] = useState<SystemScanEvent[]>([]);
+    const [payload, setPayload] = useState<Record<string, unknown> | null>(
+        null,
+    );
+    const [streaming, setStreaming] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [page, setPage] = useState(1);
-    const [searchInput, setSearchInput] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
-    const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
     const [modal, setModal] = useState<{
         column: string;
         value: string;
     } | null>(null);
 
-    const dateStr = (() => {
-        const y = selectedDate.getFullYear();
-        const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
-        const d = String(selectedDate.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-    })();
+    const abortRef = useRef<AbortController | null>(null);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
 
-    const startTime = `${dateStr} 00:00:00`;
-    const endTime = `${dateStr} 23:59:59`;
+    const startScan = useCallback(() => {
+        if (!cellName) return;
 
-    const loadData = useCallback(async () => {
-        setLoading(true);
+        // Abort previous stream
+        abortRef.current?.abort();
+        setEvents([]);
+        setPayload(null);
         setError(null);
-        try {
-            const effectiveSearch = cellName || searchQuery || undefined;
-            const resp = await fetchContextSnapshot(
-                page,
-                PAGE_SIZE,
-                effectiveSearch,
-                startTime,
-                endTime,
-            );
-            setData(resp);
-        } catch (err: unknown) {
-            setError(
-                err instanceof Error ? err.message : 'Failed to load data',
-            );
-        } finally {
-            setLoading(false);
-        }
-    }, [page, searchQuery, cellName, startTime, endTime]);
+        setStreaming(true);
 
-    // reset on filter changes
-    useEffect(() => {
-        setPage(1);
-        setExpandedRows(new Set());
-    }, [dateStr, searchQuery, cellName]);
+        const request: SystemScanRequest = {
+            task_type: 'MRO',
+            cells: [cellName],
+            timestamp: formatTimestamp(selectedDate),
+            enable_web_search: false,
+            save_to_db: false,
+        };
 
-    useEffect(() => {
-        loadData();
-    }, [loadData]);
-
-    const handleSearch = () => {
-        setPage(1);
-        setSearchQuery(searchInput);
-    };
-
-    const toggleRow = (idx: number) =>
-        setExpandedRows((prev) => {
-            const next = new Set(prev);
-            next.has(idx) ? next.delete(idx) : next.add(idx);
-            return next;
-        });
-
-    const totalPages = data
-        ? Math.max(1, Math.ceil(data.total / PAGE_SIZE))
-        : 1;
-
-    // ── states ──────────────────────────────────────────
-
-    if (loading && !data) {
-        return (
-            <div className="flex flex-col gap-4 p-6">
-                <Skeleton className="h-8 w-48" />
-                <Skeleton className="h-10 w-full" />
-                {Array.from({ length: 4 }).map((_, i) => (
-                    <Skeleton key={i} className="h-14 w-full" />
-                ))}
-            </div>
+        const controller = streamSystemScan(
+            request,
+            (event) => {
+                setEvents((prev) => [...prev, event]);
+                if (event.type === 'done' && event.payload) {
+                    setPayload(event.payload);
+                }
+                if (event.type === 'error') {
+                    setError(event.text);
+                }
+            },
+            () => setStreaming(false),
+            (err) => {
+                setError(err.message);
+                setStreaming(false);
+            },
         );
-    }
 
-    if (error) {
+        abortRef.current = controller;
+    }, [cellName, selectedDate]);
+
+    // Start scan when cell or date changes
+    useEffect(() => {
+        if (cellName) {
+            startScan();
+        } else {
+            // Reset when cell deselected
+            abortRef.current?.abort();
+            setEvents([]);
+            setPayload(null);
+            setError(null);
+            setStreaming(false);
+        }
+        return () => {
+            abortRef.current?.abort();
+        };
+    }, [cellName, selectedDate, startScan]);
+
+    // Auto-scroll events
+    useEffect(() => {
+        scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, [events]);
+
+    // ── empty state ─────────────────────────────────────
+    if (!cellName) {
         return (
             <div className="flex flex-col items-center gap-3 py-12 text-center">
                 <Database className="size-10 text-muted-foreground/40" />
-                <p className="text-sm text-muted-foreground">{error}</p>
-                <Button variant="outline" size="sm" onClick={loadData}>
-                    Retry
-                </Button>
+                <p className="text-sm text-muted-foreground">
+                    Select a cell to view context snapshot
+                </p>
             </div>
         );
     }
 
-    const columns = data?.columns ?? [];
-    const rows = data?.data ?? [];
-    const plainCols = columns.filter((c) => !JSON_COLUMNS.has(c));
-    const jsonCols = columns.filter((c) => JSON_COLUMNS.has(c));
+    const dateStr = formatTimestamp(selectedDate).slice(0, 10);
 
     return (
         <div className="flex flex-col gap-4">
-            {/* header */}
-            <div className="flex items-center justify-between gap-3 flex-wrap">
+            {/* Header */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
                     <Database className="size-5 text-primary-500" />
                     <h2 className="text-base font-semibold text-foreground">
                         Context Snapshot
                     </h2>
-                    {data && (
-                        <span className="text-sm text-muted-foreground">
-                            {dateStr} · {data.total} rows
-                        </span>
-                    )}
-                    {cellName && (
-                        <Badge variant="secondary" className="text-xs">
-                            {cellName}
-                        </Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                        {dateStr}
+                    </span>
+                    <Badge variant="secondary" className="text-xs">
+                        {cellName}
+                    </Badge>
+                    {!streaming && events.length > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            onClick={startScan}
+                            title="Re-run scan"
+                        >
+                            <RefreshCw className="size-3.5" />
+                        </Button>
                     )}
                 </div>
-
-                {/* search — hidden when pre-filtered by cell */}
-                {!cellName && (
-                    <div className="flex items-center gap-2">
-                        <div className="relative">
-                            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Search cell name…"
-                                value={searchInput}
-                                onChange={(e) => setSearchInput(e.target.value)}
-                                onKeyDown={(e) =>
-                                    e.key === 'Enter' && handleSearch()
-                                }
-                                className="pl-9 w-52"
-                            />
-                        </div>
-                        <Button size="sm" onClick={handleSearch}>
-                            Search
-                        </Button>
-                    </div>
-                )}
             </div>
 
-            {/* legend */}
-            {jsonCols.length > 0 && rows.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                    {jsonCols.map((col) => {
-                        const t = themeFor(col);
-                        return (
-                            <span
-                                key={col}
-                                className={cn(
-                                    'inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium border',
-                                    t.badge,
-                                    t.border,
-                                )}
-                            >
-                                <span
-                                    className={cn(
-                                        'size-2 rounded-full',
-                                        t.badge.split(' ')[0],
-                                    )}
-                                />
-                                {col.replace(/_/g, ' ')}
+            {/* Streaming events timeline */}
+            <ScrollArea className="max-h-[200px]">
+                <div className="flex flex-col gap-1.5">
+                    {events.map((evt, i) => (
+                        <EventRow key={i} event={evt} />
+                    ))}
+                    {streaming && (
+                        <div className="flex items-center gap-2 px-3 py-2">
+                            <Loader2 className="size-4 animate-spin text-primary" />
+                            <span className="text-xs text-muted-foreground">
+                                Processing…
                             </span>
-                        );
-                    })}
-                    <span className="text-xs text-muted-foreground self-center ml-1">
-                        Click row to expand
-                    </span>
+                        </div>
+                    )}
+                    <div ref={scrollRef} />
+                </div>
+            </ScrollArea>
+
+            {/* Error retry */}
+            {error && !streaming && (
+                <div className="text-center">
+                    <Button variant="outline" size="sm" onClick={startScan}>
+                        Retry
+                    </Button>
                 </div>
             )}
 
-            {/* table */}
-            {rows.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-12 text-center">
-                    <Database className="size-12 text-muted-foreground/30" />
-                    <p className="text-sm font-medium text-foreground/70">
-                        No Data Available
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                        No context snapshot for {dateStr}.
-                    </p>
-                </div>
-            ) : (
-                <div className="overflow-x-auto rounded-lg border border-border">
-                    <table className="min-w-full divide-y divide-border text-sm">
-                        <thead className="bg-muted sticky top-0 z-10">
-                            <tr>
-                                <th className="px-2 py-2 w-8" />
-                                <th className="px-3 py-2 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                                    #
-                                </th>
-                                {plainCols.map((col) => (
-                                    <th
-                                        key={col}
-                                        className="px-3 py-2 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap"
-                                    >
-                                        {col}
-                                    </th>
-                                ))}
-                                {jsonCols.map((col) => {
-                                    const t = themeFor(col);
-                                    return (
-                                        <th
-                                            key={col}
-                                            className={cn(
-                                                'px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap',
-                                                t.text,
-                                            )}
-                                        >
-                                            {col.replace(/_/g, ' ')}
-                                        </th>
-                                    );
-                                })}
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/50 bg-card">
-                            {rows.map((row, idx) => {
-                                const expanded = expandedRows.has(idx);
-                                return (
-                                    <tr key={idx} className="contents">
-                                        <tr
-                                            className={cn(
-                                                'hover:bg-accent/50 transition-colors cursor-pointer',
-                                                expanded && 'bg-accent/30',
-                                            )}
-                                            onClick={() => toggleRow(idx)}
-                                        >
-                                            <td className="px-2 py-2 text-center">
-                                                {expanded ? (
-                                                    <ChevronUp className="size-3.5 text-muted-foreground mx-auto" />
-                                                ) : (
-                                                    <ChevronDown className="size-3.5 text-muted-foreground mx-auto" />
-                                                )}
-                                            </td>
-                                            <td className="px-3 py-2 text-xs text-muted-foreground font-mono">
-                                                {(page - 1) * PAGE_SIZE +
-                                                    idx +
-                                                    1}
-                                            </td>
-                                            {plainCols.map((col) => (
-                                                <td
-                                                    key={col}
-                                                    className="px-3 py-2"
-                                                >
-                                                    <CellValue
-                                                        value={row[col]}
-                                                        column={col}
-                                                        onExpand={() => {}}
-                                                    />
-                                                </td>
-                                            ))}
-                                            {jsonCols.map((col) => (
-                                                <td
-                                                    key={col}
-                                                    className="px-3 py-2"
-                                                    onClick={(e) =>
-                                                        e.stopPropagation()
-                                                    }
-                                                >
-                                                    <CellValue
-                                                        value={row[col]}
-                                                        column={col}
-                                                        onExpand={() =>
-                                                            setModal({
-                                                                column: col,
-                                                                value: String(
-                                                                    row[col] ??
-                                                                        '',
-                                                                ),
-                                                            })
-                                                        }
-                                                    />
-                                                </td>
-                                            ))}
-                                        </tr>
-                                        {expanded && (
-                                            <ExpandedRow
-                                                row={row}
-                                                columns={columns}
-                                            />
-                                        )}
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-
-            {/* pagination */}
-            {data && data.total > PAGE_SIZE && (
-                <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">
-                        {(page - 1) * PAGE_SIZE + 1}–
-                        {Math.min(page * PAGE_SIZE, data.total)} of {data.total}
-                    </span>
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="outline"
-                            size="icon-sm"
-                            disabled={page <= 1}
-                            onClick={() => setPage((p) => p - 1)}
-                        >
-                            <ChevronLeft className="size-4" />
-                        </Button>
-                        <span className="text-sm text-foreground font-medium">
-                            {page} / {totalPages}
-                        </span>
-                        <Button
-                            variant="outline"
-                            size="icon-sm"
-                            disabled={page >= totalPages}
-                            onClick={() => setPage((p) => p + 1)}
-                        >
-                            <ChevronRight className="size-4" />
-                        </Button>
-                    </div>
-                </div>
-            )}
-
-            {/* loading overlay for subsequent fetches */}
-            {loading && data && (
-                <div className="flex justify-center py-2">
-                    <Loader2 className="size-5 animate-spin text-primary-500" />
-                </div>
+            {/* Payload result */}
+            {payload && (
+                <PayloadResult
+                    payload={payload}
+                    onExpandDetail={(col, val) =>
+                        setModal({ column: col, value: val })
+                    }
+                />
             )}
 
             {/* JSON detail dialog */}

@@ -5,3 +5,191 @@ curl -X POST http://172.16.28.63:8099/system-scan/stream  -H "Content-Type: appl
     "enable_web_search": false,
     "save_to_db": false
 }'
+
+@app.post("/system-scan/stream", tags=["workflow"])
+async def system_scan_stream(request: SystemScanRequest) -> StreamingResponse:
+    """SSE stream of agent progress for a scan→assign→plan cycle.
+Emits ``data: <json>\\n\\n`` events with the shape
+``{"type", "icon", "text"}`` as the pipeline advances.  The final
+``"done"`` event also carries a ``"payload"`` key with the full result
+so the client never needs a follow-up request.
+
+Event types (in order): ``start``, ``scan``, ``scan_result``,
+``assign``, ``assign_ok``/``assign_err``, ``tactical_trigger``,
+``tactical_wait``, ``tactical_done``, ``done`` | ``error``.
+"""
+queue: asyncio.Queue = asyncio.Queue()
+
+asyncio.create_task(
+    run_system_scan_streaming(
+        queue=queue,
+        task_type=TaskType(request.task_type),
+        cells=request.cells,
+        timestamp=request.timestamp,
+        start_date=datetime.fromisoformat(request.start_date) if request.start_date else None,
+        end_date=datetime.fromisoformat(request.end_date) if request.end_date else None,
+        enable_web_search=request.enable_web_search,
+        save_to_db=request.save_to_db,
+    )
+)
+
+async def sse_generator():
+    while True:
+        event = await queue.get()
+        if event is None:  # sentinel from run_system_scan_streaming
+            break
+        yield f"data: {json.dumps(event)}\n\n"
+
+return StreamingResponse(
+    sse_generator(),
+    media_type="text/event-stream",
+    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+)
+
+
+async def run_system_scan_streaming(
+    queue: asyncio.Queue,
+    task_type: TaskType,
+    cells: list[str],
+    timestamp: Optional[str] = None,
+    kpi_dir: Optional[Path] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    enable_web_search: bool = True,
+    save_to_db: bool = True,
+) -> None:
+    """Streaming variant of run_system_scan.
+Pushes ``{"type", "icon", "text"}`` event dicts into *queue* at each
+meaningful pipeline milestone.  A ``None`` sentinel is always enqueued
+last so the SSE generator can close cleanly regardless of outcome.
+The final ``"done"`` event includes a ``"payload"`` key with the full
+result, eliminating the need for a second HTTP request from the client.
+"""
+
+async def emit(type_: str, icon: str, text: str, **extra) -> None:
+    await queue.put({"type": type_, "icon": icon, "text": text, **extra})
+
+_kpi_dir = kpi_dir or _DEFAULT_KPI_DIR
+_timestamp = timestamp or datetime.now().isoformat()
+task_str = task_type.value if hasattr(task_type, "value") else str(task_type)
+
+try:
+    await emit("start", "🚀", f"Starting {task_str} scan on {len(cells)} cell(s)\u2026")
+
+    # ── Step 1: Scan ────────────────────────────────────────────────────
+    await emit("scan", "🔍", f"Scanning {len(cells)} cells for {task_str} anomalies\u2026")
+
+    df: pd.DataFrame = await scan_network(
+        task_type=task_type,
+        cells=cells,
+        timestamp=_timestamp,
+        kpi_dir=_kpi_dir,
+        output_dir=_kpi_dir.parent / "scan_results",
+        enable_web_search=enable_web_search,
+        save_to_db=save_to_db,
+    )
+
+    intent_id: Optional[str] = df["intent_id"].iloc[0] if len(df) > 0 else None
+    positive_cells: list[str] = (
+        df.loc[df["decision"] == True, "cellname"].tolist()  # noqa: E712
+        if "decision" in df.columns and len(df) > 0
+        else []
+    )
+
+    await emit(
+        "scan_result", "📊",
+        f"Scan complete \u2014 {len(positive_cells)}/{len(cells)} cell(s) flagged.",
+    )
+
+    if not positive_cells:
+        await emit(
+            "done", "✅", "No anomalies detected \u2014 no action required.",
+            payload={
+                "intent_id": intent_id, "task_type": task_str,
+                "positive_cells": [], "assigned_cells": [],
+                "failed_cells": [], "errors": [], "plan": None,
+            },
+        )
+        return
+
+    # ── Step 2: Assign ──────────────────────────────────────────────────
+    assigned_cells: list[str] = []
+    failed_cells: list[str] = []
+    errors: dict[str, str] = {}
+
+    await emit("assign", "📋", f"Assigning tasks to {len(positive_cells)} flagged cell(s)\u2026")
+
+    for cell in positive_cells:
+        try:
+            await assign_task(task_type=task_type, cell_ids=[cell], intent_id=intent_id or "")
+            assigned_cells.append(cell)
+            await emit("assign_ok", "✅", f"Assigned: {cell}")
+        except Exception as exc:  # noqa: BLE001
+            failed_cells.append(cell)
+            errors[cell] = str(exc)
+            await emit("assign_err", "❌", f"Failed: {cell} \u2014 {exc}")
+
+    if not assigned_cells:
+        await emit(
+            "done", "⚠️", "All task assignments failed \u2014 no plan generated.",
+            payload={
+                "intent_id": intent_id, "task_type": task_str,
+                "positive_cells": positive_cells, "assigned_cells": [],
+                "failed_cells": failed_cells, "errors": list(errors.values()),
+                "plan": None,
+            },
+        )
+        return
+
+    # ── Step 3: Tactical ────────────────────────────────────────────────
+    date_str = datetime.fromisoformat(_timestamp).strftime("%Y-%m-%d")
+    token = str(uuid.uuid4())
+    evt = asyncio.Event()
+    result_slot: dict = {}
+    _tactical_pending[token] = (evt, result_slot)
+    callback_url = f"{_SERVE_BASE_URL}/tactical/callback?token={token}"
+
+    try:
+        await emit(
+            "tactical_trigger", "🤖",
+            f"Triggering {task_str} plan generation for {len(assigned_cells)} cell(s)\u2026",
+        )
+        await _trigger_prediction(task_str, assigned_cells, callback_url)
+
+        await emit(
+            "tactical_wait", "⏳",
+            f"Waiting for ML pipeline callback (timeout {int(_CALLBACK_TIMEOUT)}s)\u2026",
+        )
+        await asyncio.wait_for(evt.wait(), timeout=_CALLBACK_TIMEOUT)
+
+        cb_status = result_slot.get("status", "success")
+        if cb_status != "success":
+            raise RuntimeError(
+                f"ML pipeline failure for intent {intent_id!r}: "
+                f"{result_slot.get('error_message')}"
+            )
+
+        await emit("tactical_done", "📦", "Downloading action plan from MinIO\u2026")
+        plan = _load_plan_from_minio(task_str, date_str)
+    finally:
+        _tactical_pending.pop(token, None)
+
+    await emit(
+        "done", "✅",
+        f"Plan ready \u2014 intent {intent_id} ({task_str}, {date_str}).",
+        payload={
+            "intent_id": intent_id,
+            "task_type": task_str,
+            "positive_cells": positive_cells,
+            "assigned_cells": assigned_cells,
+            "failed_cells": failed_cells,
+            "errors": list(errors.values()),
+            "plan": plan,
+        },
+    )
+
+except Exception as exc:  # noqa: BLE001
+    logger.exception("[system_stream] Unhandled error: %s", exc)
+    await queue.put({"type": "error", "icon": "💥", "text": str(exc)})
+finally:
+    await queue.put(None)  # sentinel – always closes the stream

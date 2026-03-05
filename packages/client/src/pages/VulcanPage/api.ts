@@ -6,8 +6,6 @@
  */
 
 import type {
-    ContextSnapshotResponse,
-    ContextSnapshotRow,
     NetworkScanData,
     SystemScanEvent,
     SystemScanRequest,
@@ -20,92 +18,17 @@ const API_BASE =
 const SCAN_BASE =
     import.meta.env.VITE_NETWORK_SCAN_URL || `${API_BASE}/network-scan/scan`;
 
-// ── Context Snapshot (via system-scan/stream) ───────────
+// ── Helpers ─────────────────────────────────────────────
 
-export async function fetchContextSnapshot(
-    _page = 1,
-    _pageSize = 20,
-    cellName?: string,
-    _startTime?: string,
-    _endTime?: string,
-): Promise<ContextSnapshotResponse> {
-    if (!cellName) {
-        return { total: 0, page: 1, page_size: _pageSize, columns: [], data: [] };
-    }
-
-    const body: SystemScanRequest = {
-        task_type: 'MRO',
-        cells: [cellName],
-        timestamp: _startTime
-            ? new Date(_startTime).toISOString()
-            : new Date().toISOString(),
-        enable_web_search: false,
-        save_to_db: false,
-    };
-
-    const res = await fetch(`${API_BASE}/system-scan/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-
-    if (!res.ok || !res.body) {
-        throw new Error(`Context snapshot (system-scan) failed: ${res.status}`);
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let payload: Record<string, unknown> | undefined;
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const chunks = buffer.split('\n\n');
-        buffer = chunks.pop() ?? '';
-
-        for (const chunk of chunks) {
-            const line = chunk.replace(/^data:\s*/, '').trim();
-            if (!line) continue;
-            try {
-                const evt = JSON.parse(line) as SystemScanEvent;
-                if (evt.type === 'done' && evt.payload) {
-                    payload = evt.payload;
-                }
-            } catch {
-                /* skip malformed */
-            }
-        }
-    }
-
-    if (!payload) {
-        return { total: 0, page: 1, page_size: _pageSize, columns: [], data: [] };
-    }
-
-    // Normalise the payload into ContextSnapshotResponse
-    if (Array.isArray(payload.data)) {
-        const rows = payload.data as ContextSnapshotRow[];
-        const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-        return {
-            total: rows.length,
-            page: 1,
-            page_size: rows.length,
-            columns,
-            data: rows,
-        };
-    }
-
-    // Single-object payload — wrap as one row
-    const columns = Object.keys(payload);
-    return {
-        total: 1,
-        page: 1,
-        page_size: 1,
-        columns,
-        data: [payload as unknown as ContextSnapshotRow],
-    };
+/** Format a Date as "YYYY-MM-DDTHH:mm:ss" (no Z, no ms) — matches backend expectation. */
+export function formatTimestamp(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const h = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
+    return `${y}-${m}-${day}T${h}:${min}:${s}`;
 }
 
 // ── Network Scan ────────────────────────────────────────
@@ -172,16 +95,19 @@ export function streamSystemScan(
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n\n');
-                buffer = lines.pop() ?? '';
+                const parts = buffer.split('\n\n');
+                buffer = parts.pop() ?? '';
 
-                for (const chunk of lines) {
-                    const line = chunk.replace(/^data:\s*/, '').trim();
-                    if (!line) continue;
-                    try {
-                        onEvent(JSON.parse(line) as SystemScanEvent);
-                    } catch {
-                        /* skip malformed */
+                for (const part of parts) {
+                    // Each SSE chunk may have one or more "data: ..." lines
+                    for (const raw of part.split('\n')) {
+                        const line = raw.replace(/^data:\s*/, '').trim();
+                        if (!line) continue;
+                        try {
+                            onEvent(JSON.parse(line) as SystemScanEvent);
+                        } catch {
+                            /* skip malformed */
+                        }
                     }
                 }
             }
