@@ -11,7 +11,6 @@ import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { CellFeatures, ModelType } from './types';
 
@@ -164,7 +163,7 @@ const NetworkCellsTable = ({
                 </div>
 
                 {/* rows */}
-                <ScrollArea className="max-h-[420px]">
+                <div className="max-h-96 overflow-y-auto">
                     <div className="divide-y divide-border">
                         {filtered.length === 0 ? (
                             <p className="px-4 py-10 text-center text-sm text-muted-foreground">
@@ -330,7 +329,7 @@ const NetworkCellsTable = ({
                             })
                         )}
                     </div>
-                </ScrollArea>
+                </div>
             </div>
 
             {/* summary stats */}

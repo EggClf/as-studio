@@ -73,3 +73,95 @@ export interface SystemScanRequest {
     enable_web_search?: boolean;
     save_to_db?: boolean;
 }
+
+// ── Decision Tree / ML Model ────────────────────────────
+
+export type IntentLabel = 'MRO' | 'ES';
+
+export interface DecisionTreeNode {
+    nodeId: number;
+    condition: string;
+    threshold: number;
+    featureValue: number;
+    featureName: string;
+    passed: boolean;
+}
+
+export interface DecisionTreeTrace {
+    intentId: string;
+    intentLabel: IntentLabel;
+    decision?: boolean;
+    confidence?: number;
+    path: DecisionTreeNode[];
+    topFeatures: { name: string; value: number; importance: number }[];
+    counterfactual: {
+        feature: string;
+        currentValue: number;
+        thresholdValue: number;
+        alternativeIntent: IntentLabel;
+    }[];
+    featureSnapshot: Record<string, number>;
+}
+
+export interface CellDecisionResult {
+    cellId: string;
+    modelType: IntentLabel;
+    decision: boolean | null;
+    confidence: number | null;
+    probabilities: number[] | null;
+    path: DecisionTreeNode[];
+    topFeatures: { name: string; value: number; importance: number }[];
+    counterfactual: {
+        feature: string;
+        currentValue: number;
+        thresholdValue: number;
+        alternativeIntent: IntentLabel;
+    }[];
+    featureSnapshot: Record<string, number>;
+    error: string | null;
+}
+
+export interface BatchTraceResult {
+    modelType: IntentLabel;
+    totalCells: number;
+    appliedCount: number;
+    notAppliedCount: number;
+    errorCount: number;
+    results: CellDecisionResult[];
+    timestamp: string;
+}
+
+// ── Plan Data ────────────────────────────────────────────
+
+export interface ESScheduleEntry {
+    hour: number;
+    [cellname: string]: number;
+}
+
+export interface ESForecastEntry {
+    hour: number;
+    [cellname: string]: number;
+}
+
+export interface ESPlanData {
+    schedule: ESScheduleEntry[];
+    forecast: ESForecastEntry[];
+}
+
+export interface MROConfigPlanEntry {
+    hour: number;
+    hom: number;
+    ttt: number;
+    predicted_hos: number;
+}
+
+export interface MROPlanData {
+    cell_names: string[];
+    config_plan: MROConfigPlanEntry[];
+}
+
+export interface PlanLoadResponse {
+    task_type: 'MRO' | 'ES';
+    date: string;
+    data: ESPlanData | MROPlanData;
+}
