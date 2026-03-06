@@ -165,3 +165,54 @@ export interface PlanLoadResponse {
     date: string;
     data: ESPlanData | MROPlanData;
 }
+
+// ── Intent Management (Vulcan Agent API) ────────────────
+
+export interface IntentSummary {
+    intent_id: string;
+    actor: string;
+    task_type: string;
+    target_type: string;
+    target_count: number;
+    start_time: string | null;
+    end_time: string | null;
+    execution_mode: string | null;
+    has_trigger: boolean;
+    has_kpi: boolean;
+    duration_hours: number | null;
+    time_bucket: string;
+    created_at: string;
+}
+
+export interface IntentDetail extends IntentSummary {
+    trigger: Record<string, unknown> | null;
+    kpi: Record<string, unknown> | null;
+    note: string | null;
+}
+
+export interface TargetCell {
+    cell_name: string;
+    sequence_order: number;
+    decision: boolean | null;
+    decision_score: number | null;
+}
+
+export interface IntentCellDecision {
+    cell_name: string;
+    decision: boolean;
+    decision_score: number;
+    explain_path: Record<string, unknown>[] | null;
+    model_version: string | null;
+    context_snapshot_id: string | null;
+    created_at: string;
+}
+
+export interface DispatchRecord {
+    dispatch_id: string;
+    task_type: string;
+    tactical_agent_endpoint: string;
+    target_cells: string[];
+    tactical_response: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
+}

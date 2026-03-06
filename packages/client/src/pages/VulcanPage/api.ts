@@ -10,6 +10,11 @@ import type {
     NetworkScanData,
     SystemScanEvent,
     SystemScanRequest,
+    IntentSummary,
+    IntentDetail,
+    TargetCell,
+    IntentCellDecision,
+    DispatchRecord,
 } from './types';
 
 const API_BASE =
@@ -240,5 +245,73 @@ export async function fetchPlanData(
         body: JSON.stringify({ task_type: taskType, date }),
     });
     if (!res.ok) throw new Error(`Plan load failed: ${res.status}`);
+    return res.json();
+}
+
+// ── Intent Management API (172.16.28.63:8099/intents) ───
+
+const INTENTS_BASE = `${API_BASE}/intents`;
+
+export interface IntentListParams {
+    task_type?: string;
+    actor?: string;
+    date?: string;
+    limit?: number;
+    offset?: number;
+}
+
+export async function fetchIntents(
+    params: IntentListParams = {},
+): Promise<IntentSummary[]> {
+    const qs = new URLSearchParams();
+    if (params.task_type) qs.set('task_type', params.task_type);
+    if (params.actor) qs.set('actor', params.actor);
+    if (params.date) qs.set('date', params.date);
+    if (params.limit != null) qs.set('limit', String(params.limit));
+    if (params.offset != null) qs.set('offset', String(params.offset));
+
+    const url = `${INTENTS_BASE}${qs.toString() ? `?${qs}` : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch intents: ${res.status}`);
+    return res.json();
+}
+
+export async function fetchIntentDetail(
+    intentId: string,
+): Promise<IntentDetail> {
+    const res = await fetch(`${INTENTS_BASE}/${encodeURIComponent(intentId)}`);
+    if (!res.ok) throw new Error(`Failed to fetch intent ${intentId}: ${res.status}`);
+    return res.json();
+}
+
+export async function fetchIntentCells(
+    intentId: string,
+): Promise<TargetCell[]> {
+    const res = await fetch(
+        `${INTENTS_BASE}/${encodeURIComponent(intentId)}/cells`,
+    );
+    if (!res.ok) throw new Error(`Failed to fetch cells for ${intentId}: ${res.status}`);
+    return res.json();
+}
+
+export async function fetchIntentDecisions(
+    intentId: string,
+    approvedOnly = false,
+): Promise<IntentCellDecision[]> {
+    const qs = approvedOnly ? '?approved_only=true' : '';
+    const res = await fetch(
+        `${INTENTS_BASE}/${encodeURIComponent(intentId)}/decisions${qs}`,
+    );
+    if (!res.ok) throw new Error(`Failed to fetch decisions for ${intentId}: ${res.status}`);
+    return res.json();
+}
+
+export async function fetchIntentDispatch(
+    intentId: string,
+): Promise<DispatchRecord[]> {
+    const res = await fetch(
+        `${INTENTS_BASE}/${encodeURIComponent(intentId)}/dispatch`,
+    );
+    if (!res.ok) throw new Error(`Failed to fetch dispatch for ${intentId}: ${res.status}`);
     return res.json();
 }

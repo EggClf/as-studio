@@ -1,0 +1,279 @@
+"""
+Intent Management API.
+
+Exposes read-oriented endpoints over the vulcan agent database schema (spec v3).
+Each endpoint is anchored to a concrete operational/business question.
+"""
+
+import json
+import logging
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+
+from icflow.utils.postgres import get_postgres_client, PostgresClient
+
+logger = logging.getLogger(name)
+
+router = APIRouter(
+    prefix="/intents",
+    tags=["intents"],
+    responses={404: {"description": "Not found"}},
+)
+---------------------------------------------------------------------------
+Dependency
+---------------------------------------------------------------------------
+
+async def get_db() -> PostgresClient:
+    client = get_postgres_client()
+    await client.connect()
+    return client
+---------------------------------------------------------------------------
+Response models
+---------------------------------------------------------------------------
+
+class IntentSummary(BaseModel):
+    """Row from the intent_summary view."""
+    intent_id: str
+    actor: str
+    task_type: str
+    target_type: str
+    target_count: int
+    start_time: Optional[str]
+    end_time: Optional[str]
+    execution_mode: Optional[str]
+    has_trigger: bool
+    has_kpi: bool
+    duration_hours: Optional[float]
+    time_bucket: str
+    created_at: str
+
+class IntentDetail(IntentSummary):
+    """Full intent row with raw trigger/kpi payloads."""
+    trigger: Optional[Dict[str, Any]]
+    kpi: Optional[Dict[str, Any]]
+    note: Optional[str]
+
+class TargetCell(BaseModel):
+    """Cell targeted by an intent, with its decision when available."""
+    cell_name: str
+    sequence_order: int
+    decision: Optional[bool]
+    decision_score: Optional[float]
+
+class CellDecision(BaseModel):
+    """ML model decision for a single cell within an intent."""
+    cell_name: str
+    decision: bool
+    decision_score: float
+    explain_path: Optional[List[Dict[str, Any]]]
+    model_version: Optional[str]
+    context_snapshot_id: Optional[str]
+    created_at: str
+
+class DispatchRecord(BaseModel):
+    """Tactical dispatch record for an intent."""
+    dispatch_id: str
+    task_type: str
+    tactical_agent_endpoint: str
+    target_cells: List[str]
+    tactical_response: Optional[Dict[str, Any]]
+    created_at: str
+    updated_at: str
+---------------------------------------------------------------------------
+Endpoints
+---------------------------------------------------------------------------
+
+@router.get(
+    "",
+    response_model=List[IntentSummary],
+    summary="List intent requests",
+    description=(
+        "Business question: Which intents are active in the system, "
+        "broken down by task type and actor? Useful for an operational dashboard."
+    ),
+)
+async def list_intents(
+    task_type: Optional[str] = Query(None, description="Filter by task type: MRO, ES, QoS, TS"),
+    actor: Optional[str] = Query(None, description="Filter by actor (agent or user e-mail)"),
+    date: Optional[str] = Query(None, description="Filter by time_bucket date (YYYY-MM-DD)"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: PostgresClient = Depends(get_db),
+):
+    conditions: List[str] = []
+    params: List[Any] = []
+    idx = 1
+if task_type:
+    conditions.append(f"task_type = ${idx}")
+    params.append(task_type.upper())
+    idx += 1
+if actor:
+    conditions.append(f"actor ILIKE ${idx}")
+    params.append(f"%{actor}%")
+    idx += 1
+if date:
+    conditions.append(f"time_bucket::date = ${idx}::date")
+    params.append(date)
+    idx += 1
+
+where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+query = f"""
+    SELECT intent_id, actor, task_type, target_type, target_count,
+           start_time, end_time, execution_mode, has_trigger, has_kpi,
+           duration_hours, time_bucket, created_at
+    FROM intent_summary
+    {where}
+    ORDER BY created_at DESC
+    LIMIT ${idx} OFFSET ${idx + 1}
+"""
+params += [limit, offset]
+
+async with db.acquire() as conn:
+    rows = await conn.fetch(query, *params)
+
+return [_row_to_dict(r) for r in rows]
+
+@router.get(
+    "/{intent_id}",
+    response_model=IntentDetail,
+    summary="Get intent detail",
+    description=(
+        "Business question: What is the full configuration of this intent — "
+        "its target scope, scheduling mode, trigger conditions, and KPI targets?"
+    ),
+)
+async def get_intent(intent_id: str, db: PostgresClient = Depends(get_db)):
+    query = """
+        SELECT ir.intent_id, ir.actor, ir.task_type, ir.target_type,
+               ir.start_time, ir.end_time, ir.execution_mode,
+               ir.trigger, ir.kpi, ir.note, ir.time_bucket, ir.created_at,
+               COUNT(DISTINCT itc.cell_name)                            AS target_count,
+               (ir.trigger IS NOT NULL)                                 AS has_trigger,
+               (ir.kpi    IS NOT NULL)                                  AS has_kpi,
+               EXTRACT(EPOCH FROM (ir.end_time - ir.start_time)) / 3600 AS duration_hours
+        FROM intent_request ir
+        LEFT JOIN intent_target_cells itc ON ir.intent_id = itc.intent_id
+        WHERE ir.intent_id = $1
+        GROUP BY ir.intent_id
+    """
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(query, intent_id)
+if not row:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intent not found")
+
+return _row_to_dict(row)
+
+@router.get(
+    "/{intent_id}/cells",
+    response_model=List[TargetCell],
+    summary="List target cells with decisions",
+    description=(
+        "Business question: Of all cells targeted by this intent, "
+        "which were approved vs. rejected by the ML model — and at what confidence?"
+    ),
+)
+async def list_intent_cells(intent_id: str, db: PostgresClient = Depends(get_db)):
+    await _require_intent(intent_id, db)
+query = """
+    SELECT itc.cell_name, itc.sequence_order,
+           cd.decision, cd.decision_score
+    FROM intent_target_cells itc
+    LEFT JOIN cell_decision cd
+           ON cd.intent_id = itc.intent_id AND cd.cell_name = itc.cell_name
+    WHERE itc.intent_id = $1
+    ORDER BY itc.sequence_order
+"""
+async with db.acquire() as conn:
+    rows = await conn.fetch(query, intent_id)
+
+return [_row_to_dict(r) for r in rows]
+
+@router.get(
+    "/{intent_id}/decisions",
+    response_model=List[CellDecision],
+    summary="Cell-level ML decisions",
+    description=(
+        "Business question: Which cells did the model approve for intervention, "
+        "what reasoning path was taken, and which model version scored them?"
+    ),
+)
+async def list_decisions(
+    intent_id: str,
+    approved_only: bool = Query(False, description="Return only decision=true cells"),
+    db: PostgresClient = Depends(get_db),
+):
+    await _require_intent(intent_id, db)
+conditions = ["intent_id = $1"]
+params: List[Any] = [intent_id]
+if approved_only:
+    conditions.append("decision = TRUE")
+
+query = f"""
+    SELECT cell_name, decision, decision_score,
+           explain_path, model_version, context_snapshot_id, created_at
+    FROM cell_decision
+    WHERE {' AND '.join(conditions)}
+    ORDER BY decision_score DESC
+"""
+async with db.acquire() as conn:
+    rows = await conn.fetch(query, *params)
+
+return [_row_to_dict(r) for r in rows]
+
+@router.get(
+    "/{intent_id}/dispatch",
+    response_model=List[DispatchRecord],
+    summary="Tactical dispatch records",
+    description=(
+        "Business question: Was the tactical agent dispatched for this intent, "
+        "to which endpoint, and what was the response payload?"
+    ),
+)
+async def get_dispatch(intent_id: str, db: PostgresClient = Depends(get_db)):
+    await _require_intent(intent_id, db)
+query = """
+    SELECT dispatch_id, task_type, tactical_agent_endpoint,
+           target_cells, tactical_response, created_at, updated_at
+    FROM tactical_dispatch
+    WHERE intent_id = $1
+    ORDER BY created_at DESC
+"""
+async with db.acquire() as conn:
+    rows = await conn.fetch(query, intent_id)
+
+return [_row_to_dict(r) for r in rows]
+---------------------------------------------------------------------------
+Helpers
+---------------------------------------------------------------------------
+
+async def _require_intent(intent_id: str, db: PostgresClient) -> None:
+    """Raise 404 if intent_id does not exist."""
+    async with db.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM intent_request WHERE intent_id = $1", intent_id
+        )
+    if not exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intent not found")
+
+def _row_to_dict(row) -> Dict[str, Any]:
+    """Convert asyncpg Record to a plain dict.
+- Casts datetime/date to ISO strings.
+- Deserialises JSONB fields that asyncpg returns as raw JSON strings.
+"""
+d = dict(row)
+for k, v in d.items():
+    if hasattr(v, "isoformat"):          # datetime / date
+        d[k] = v.isoformat()
+    elif isinstance(v, str) and v and v[0] in ("{", "["):
+        try:
+            d[k] = json.loads(v)
+        except (json.JSONDecodeError, ValueError):
+            pass
+return d
+
+
+#test 
+
+this backend serving as 172.16.28.63:8099
