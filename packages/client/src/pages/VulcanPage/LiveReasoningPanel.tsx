@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { streamIntentReasoning } from './api';
+import { streamIntentReasoning, formatTimestamp } from './api';
 import type {
     ReasoningStreamEvent,
     ReasoningProgressEvent,
@@ -325,11 +325,12 @@ const CellCard = ({
 // ── main component ──────────────────────────────────────
 
 interface Props {
-    intentId: string;
+    cells: string[];
     taskType: string;
+    timestamp?: string;
 }
 
-const LiveReasoningPanel = ({ intentId, taskType }: Props) => {
+const LiveReasoningPanel = ({ cells, taskType, timestamp }: Props) => {
     const [events, setEvents] = useState<ReasoningStreamEvent[]>([]);
     const [streaming, setStreaming] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -374,8 +375,16 @@ const LiveReasoningPanel = ({ intentId, taskType }: Props) => {
         setError(null);
         setStreaming(true);
 
+        const request = {
+            task_type: taskType,
+            cells,
+            timestamp: timestamp ?? formatTimestamp(new Date()),
+            enable_web_search: false,
+            save_to_db: false,
+        };
+
         const controller = streamIntentReasoning(
-            intentId,
+            request,
             (event) => setEvents((prev) => [...prev, event]),
             () => setStreaming(false),
             (err) => {
@@ -384,7 +393,7 @@ const LiveReasoningPanel = ({ intentId, taskType }: Props) => {
             },
         );
         abortRef.current = controller;
-    }, [intentId]);
+    }, [cells, taskType, timestamp]);
 
     useEffect(() => {
         startStreaming();

@@ -786,8 +786,9 @@ const IntentDetailPage = () => {
         {showReasoning && (
             <div className="w-[420px] border-l border-border shrink-0 bg-background hidden xl:flex">
                 <LiveReasoningPanel
-                    intentId={intentId!}
+                    cells={cells.map((c) => c.cell_name)}
                     taskType={detail.task_type}
+                    timestamp={detail.start_time ?? undefined}
                 />
             </div>
         )}

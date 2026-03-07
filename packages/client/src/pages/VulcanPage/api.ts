@@ -320,7 +320,7 @@ export async function fetchIntentDispatch(
 // ── Intent Reasoning SSE Stream ─────────────────────────
 
 export function streamIntentReasoning(
-    intentId: string,
+    request: SystemScanRequest,
     onEvent: (event: ReasoningStreamEvent) => void,
     onDone: () => void,
     onError: (err: Error) => void,
@@ -329,10 +329,12 @@ export function streamIntentReasoning(
 
     (async () => {
         try {
-            const res = await fetch(
-                `${API_BASE}/intents/${encodeURIComponent(intentId)}/stream`,
-                { signal: controller.signal },
-            );
+            const res = await fetch(`${API_BASE}/system-scan/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request),
+                signal: controller.signal,
+            });
 
             if (!res.ok || !res.body) {
                 throw new Error(`Reasoning stream failed: ${res.status}`);
