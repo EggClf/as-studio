@@ -10,6 +10,7 @@ import {
     Edit3,
     Loader2,
     Pause,
+    Radio,
     Search,
     XCircle,
 } from 'lucide-react';
@@ -31,6 +32,7 @@ import type {
     IntentCellDecision,
     DispatchRecord,
 } from './types';
+import LiveReasoningPanel from './LiveReasoningPanel';
 
 // ── helpers ─────────────────────────────────────────────
 
@@ -251,6 +253,7 @@ const IntentDetailPage = () => {
     // UI state
     const [cellSearch, setCellSearch] = useState('');
     const [showLogicDetails, setShowLogicDetails] = useState(false);
+    const [showReasoning, setShowReasoning] = useState(true);
 
     // Load all data
     const loadData = useCallback(async () => {
@@ -339,7 +342,8 @@ const IntentDetailPage = () => {
     const sc = statusConfig(status);
 
     return (
-        <div className="flex flex-col gap-6 p-6 h-full overflow-auto">
+        <div className="flex h-full overflow-hidden">
+        <div className={cn("flex-1 flex flex-col gap-6 p-6 h-full overflow-auto min-w-0")}>
             {/* ── Back button ────────────────────────────── */}
             <Button
                 variant="ghost"
@@ -377,6 +381,14 @@ const IntentDetailPage = () => {
                         </div>
 
                         <div className="flex items-center gap-2">
+                            <Button
+                                variant={showReasoning ? 'secondary' : 'default'}
+                                size="sm"
+                                onClick={() => setShowReasoning((prev) => !prev)}
+                            >
+                                <Radio className="w-4 h-4 mr-1.5" />
+                                {showReasoning ? 'Hide Reasoning' : 'Live Reasoning'}
+                            </Button>
                             <Button variant="outline" size="sm">
                                 <Edit3 className="w-4 h-4 mr-1.5" />
                                 Edit Intent
@@ -768,6 +780,17 @@ const IntentDetailPage = () => {
                     </CardContent>
                 </Card>
             )}
+        </div>
+
+        {/* ── Live Reasoning Panel ───────────────────── */}
+        {showReasoning && (
+            <div className="w-[420px] border-l border-border shrink-0 bg-background hidden xl:flex">
+                <LiveReasoningPanel
+                    intentId={intentId!}
+                    taskType={detail.task_type}
+                />
+            </div>
+        )}
         </div>
     );
 };

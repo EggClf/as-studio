@@ -216,3 +216,53 @@ export interface DispatchRecord {
     created_at: string;
     updated_at: string;
 }
+
+// ── Reasoning Stream Events ─────────────────────────────
+
+export interface ReasoningProgressEvent {
+    channel: 'progress';
+    type: string;
+    icon: string;
+    text: string;
+}
+
+export interface ReasoningCellContextEvent {
+    channel: 'content';
+    type: 'cell_context';
+    cell: string;
+    ne_name: string;
+    kpi: Record<string, number>;
+    metadata: Record<string, string>;
+    historical_qos: (number | string)[];
+    historical_load: (number | string)[];
+    social_event_score: number;
+}
+
+export interface ReasoningCellFeaturesEvent {
+    channel: 'content';
+    type: 'cell_features';
+    cell: string;
+    task_type: string;
+    features: Record<string, number>;
+}
+
+export interface ReasoningCellDecisionEvent {
+    channel: 'content';
+    type: 'cell_decision';
+    cell: string;
+    decision: boolean;
+    decision_score: number;
+    explain_path: { featureName: string; condition: string; passed: boolean }[];
+}
+
+export type ReasoningStreamEvent =
+    | ReasoningProgressEvent
+    | ReasoningCellContextEvent
+    | ReasoningCellFeaturesEvent
+    | ReasoningCellDecisionEvent;
+
+export interface CellReasoningData {
+    context?: ReasoningCellContextEvent;
+    features?: ReasoningCellFeaturesEvent;
+    decision?: ReasoningCellDecisionEvent;
+}

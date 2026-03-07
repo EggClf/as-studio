@@ -15,6 +15,7 @@ import type {
     TargetCell,
     IntentCellDecision,
     DispatchRecord,
+    ReasoningStreamEvent,
 } from './types';
 
 const API_BASE =
@@ -314,4 +315,60 @@ export async function fetchIntentDispatch(
     );
     if (!res.ok) throw new Error(`Failed to fetch dispatch for ${intentId}: ${res.status}`);
     return res.json();
+}
+
+// ── Intent Reasoning SSE Stream ─────────────────────────
+
+export function streamIntentReasoning(
+    intentId: string,
+    onEvent: (event: ReasoningStreamEvent) => void,
+    onDone: () => void,
+    onError: (err: Error) => void,
+): AbortController {
+    const controller = new AbortController();
+
+    (async () => {
+        try {
+            const res = await fetch(
+                `${API_BASE}/intents/${encodeURIComponent(intentId)}/stream`,
+                { signal: controller.signal },
+            );
+
+            if (!res.ok || !res.body) {
+                throw new Error(`Reasoning stream failed: ${res.status}`);
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const parts = buffer.split('\n\n');
+                buffer = parts.pop() ?? '';
+
+                for (const part of parts) {
+                    for (const raw of part.split('\n')) {
+                        const line = raw.replace(/^data:\s*/, '').trim();
+                        if (!line) continue;
+                        try {
+                            onEvent(JSON.parse(line) as ReasoningStreamEvent);
+                        } catch {
+                            /* skip malformed */
+                        }
+                    }
+                }
+            }
+            onDone();
+        } catch (err) {
+            if ((err as Error).name !== 'AbortError') {
+                onError(err as Error);
+            }
+        }
+    })();
+
+    return controller;
 }
