@@ -5,6 +5,7 @@ export enum RouterPath {
     FRIDAY = '/friday',
     EVAL = '/eval',
     VULCAN = '/vulcan',
+    TOPOLOGY = '/topology',
     TUTORIAL = 'https://doc.agentscope.io',
     API = 'https://doc.agentscope.io/api/agentscope.html',
     GITHUB = 'https://github.com/agentscope-ai/agentscope',

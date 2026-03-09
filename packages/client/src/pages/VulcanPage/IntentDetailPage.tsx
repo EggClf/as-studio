@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
     Activity,
@@ -8,11 +8,12 @@ import {
     ChevronDown,
     ChevronRight,
     Edit3,
-    Loader2,
+    FileText,
     Pause,
     Radio,
     Search,
     XCircle,
+    Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -20,17 +21,27 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
     fetchIntentDetail,
     fetchIntentCells,
     fetchIntentDecisions,
     fetchIntentDispatch,
+    streamIntentReasoning,
+    formatTimestamp,
 } from './api';
 import type {
     IntentDetail,
     TargetCell,
     IntentCellDecision,
     DispatchRecord,
+    ReasoningStreamEvent,
+    ReasoningProgressEvent,
+    ReasoningCellContextEvent,
+    ReasoningCellFeaturesEvent,
+    ReasoningCellDecisionEvent,
+    ReasoningPlanFieldEvent,
+    CellReasoningData,
 } from './types';
 import LiveReasoningPanel from './LiveReasoningPanel';
 
@@ -236,6 +247,236 @@ function TreeNode({
     );
 }
 
+// ── Cell Analysis Card (content events) ─────────────────
+
+function fmtNum(v: number): string {
+    return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(4);
+}
+
+const CellAnalysisCard = ({
+    cellName,
+    data,
+}: {
+    cellName: string;
+    data: CellReasoningData;
+}) => {
+    const [expanded, setExpanded] = useState(true);
+
+    return (
+        <Card className="overflow-hidden">
+            <button
+                className="flex items-center justify-between w-full px-4 py-3 hover:bg-accent/50 transition-colors"
+                onClick={() => setExpanded((p) => !p)}
+            >
+                <div className="flex items-center gap-2">
+                    <Activity className="size-4 text-primary" />
+                    <span className="font-mono text-sm font-semibold text-foreground">
+                        {cellName}
+                    </span>
+                    {data.context?.ne_name && (
+                        <Badge variant="secondary" className="text-[10px]">
+                            {data.context.ne_name}
+                        </Badge>
+                    )}
+                </div>
+                <div className="flex items-center gap-2">
+                    {data.decision && (
+                        <Badge
+                            className={cn(
+                                'text-[10px]',
+                                data.decision.decision
+                                    ? 'bg-green-600'
+                                    : 'bg-gray-500',
+                            )}
+                        >
+                            {data.decision.decision ? 'Action' : 'Pass'}
+                        </Badge>
+                    )}
+                    {expanded ? (
+                        <ChevronDown className="size-4 text-muted-foreground" />
+                    ) : (
+                        <ChevronRight className="size-4 text-muted-foreground" />
+                    )}
+                </div>
+            </button>
+
+            {expanded && (
+                <CardContent className="px-4 pb-4 pt-0 space-y-2">
+                    {/* KPI */}
+                    {data.context && (
+                        <div className="border border-green-200 dark:border-green-800 rounded-lg p-2.5 bg-green-50/50 dark:bg-green-950/20">
+                            <span className="text-xs font-bold uppercase tracking-wider text-green-700 dark:text-green-400 block mb-1.5">
+                                KPI
+                            </span>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                                {Object.entries(data.context.kpi).map(([k, v]) => (
+                                    <div key={k} className="flex items-baseline gap-1.5 text-[12px]">
+                                        <span className="text-muted-foreground font-medium truncate">{k}:</span>
+                                        <span className="font-mono text-foreground">{fmtNum(v)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Metadata */}
+                    {data.context && Object.keys(data.context.metadata).length > 0 && (
+                        <div className="border border-purple-200 dark:border-purple-800 rounded-lg p-2.5 bg-purple-50/50 dark:bg-purple-950/20">
+                            <span className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400 block mb-1.5">
+                                Metadata
+                            </span>
+                            <div className="space-y-0.5">
+                                {Object.entries(data.context.metadata).map(([k, v]) => (
+                                    <div key={k} className="flex items-baseline gap-1.5 text-[12px]">
+                                        <span className="text-muted-foreground font-medium">{k}:</span>
+                                        <span className="font-mono text-foreground">{v}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Features */}
+                    {data.features && (
+                        <div className="border border-blue-200 dark:border-blue-800 rounded-lg p-2.5 bg-blue-50/50 dark:bg-blue-950/20">
+                            <div className="flex items-center gap-2 mb-1.5">
+                                <span className="text-xs font-bold uppercase tracking-wider text-blue-700 dark:text-blue-400">
+                                    Features
+                                </span>
+                                <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-700">
+                                    {data.features.task_type}
+                                </Badge>
+                            </div>
+                            <div className="space-y-1">
+                                {Object.entries(data.features.features).map(([k, v]) => (
+                                    <div key={k} className="flex items-center justify-between text-[12px]">
+                                        <span className="text-muted-foreground font-medium truncate flex-1">{k}</span>
+                                        <span className="font-mono text-foreground ml-2">{fmtNum(v)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Decision */}
+                    {data.decision && (
+                        <div
+                            className={cn(
+                                'rounded-lg p-2.5 border',
+                                data.decision.decision
+                                    ? 'border-green-300 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20'
+                                    : 'border-red-300 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20',
+                            )}
+                        >
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-bold uppercase tracking-wider text-foreground">Decision</span>
+                                <div className="flex items-center gap-2">
+                                    <span className="font-mono text-xs text-muted-foreground">
+                                        Score: {(data.decision.decision_score * 100).toFixed(0)}%
+                                    </span>
+                                    <Badge className={cn('text-xs', data.decision.decision ? 'bg-green-600' : 'bg-red-600')}>
+                                        {data.decision.decision ? 'Action Required' : 'No Action'}
+                                    </Badge>
+                                </div>
+                            </div>
+                            {data.decision.explain_path?.length > 0 && (
+                                <div className="space-y-1 mt-2">
+                                    {data.decision.explain_path.map((step, i) => (
+                                        <div key={i} className="flex items-center gap-2 text-[12px] pl-2 border-l-2 border-border">
+                                            {step.passed ? (
+                                                <CheckCircle2 className="size-3.5 text-green-600 shrink-0" />
+                                            ) : (
+                                                <XCircle className="size-3.5 text-red-400 shrink-0" />
+                                            )}
+                                            <span className="text-muted-foreground font-medium">{step.featureName}</span>
+                                            <span className="font-mono text-foreground/70">{step.condition}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </CardContent>
+            )}
+        </Card>
+    );
+};
+
+// ── Plan Field Table ────────────────────────────────────
+
+const PlanFieldCard = ({ plan }: { plan: ReasoningPlanFieldEvent }) => {
+    const rows = plan.value.data;
+    if (!rows || rows.length === 0) return null;
+
+    const columns = Object.keys(rows[0]);
+
+    return (
+        <Card>
+            <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                        <FileText className="size-4 text-amber-500" />
+                        <h3 className="text-base font-bold text-foreground">
+                            Action Plan
+                        </h3>
+                        <Badge variant="secondary" className="text-[10px]">
+                            {plan.task_type}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
+                            {plan.key}
+                        </Badge>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                        {plan.value.file_path}
+                    </span>
+                </div>
+                <div className="border border-border rounded-lg overflow-hidden">
+                    <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                        <table className="w-full text-sm">
+                            <thead className="sticky top-0 bg-muted z-10">
+                                <tr>
+                                    {columns.map((col) => (
+                                        <th
+                                            key={col}
+                                            className="text-left py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border whitespace-nowrap"
+                                        >
+                                            {col}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map((row, i) => (
+                                    <tr
+                                        key={i}
+                                        className="border-b border-border/50 hover:bg-muted/50 transition-colors"
+                                    >
+                                        {columns.map((col) => (
+                                            <td
+                                                key={col}
+                                                className="py-1.5 px-3 font-mono text-sm text-foreground whitespace-nowrap"
+                                            >
+                                                {typeof row[col] === 'number'
+                                                    ? Number.isInteger(row[col])
+                                                        ? row[col]
+                                                        : (row[col] as number).toFixed(4)
+                                                    : String(row[col] ?? '—')}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-2">
+                    {plan.value.shape[0]} rows × {plan.value.shape[1]} columns
+                </p>
+            </CardContent>
+        </Card>
+    );
+};
+
 // ── Main page component ─────────────────────────────────
 
 const IntentDetailPage = () => {
@@ -254,6 +495,143 @@ const IntentDetailPage = () => {
     const [cellSearch, setCellSearch] = useState('');
     const [showLogicDetails, setShowLogicDetails] = useState(false);
     const [showReasoning, setShowReasoning] = useState(true);
+
+    // Stream state — uses a ref-based buffer to avoid re-rendering on every
+    // single SSE event.  Events are collected in the buffer and flushed to
+    // React state at most once per animation frame so the UI stays responsive.
+    const [streamEvents, setStreamEvents] = useState<ReasoningStreamEvent[]>([]);
+    const [streaming, setStreaming] = useState(false);
+    const [streamError, setStreamError] = useState<string | null>(null);
+    const abortRef = useRef<AbortController | null>(null);
+    const eventBufferRef = useRef<ReasoningStreamEvent[]>([]);
+    const rafRef = useRef<number>(0);
+
+    // Flush buffered events into React state (called via requestAnimationFrame)
+    const flushEvents = useCallback(() => {
+        rafRef.current = 0;
+        const pending = eventBufferRef.current;
+        if (pending.length === 0) return;
+        eventBufferRef.current = [];
+        console.log('[SSE-DEBUG] flushEvents → React state', {
+            count: pending.length,
+            channels: pending.map(e => `${(e as any).channel}:${e.type}`),
+        });
+        setStreamEvents((prev) => [...prev, ...pending]);
+    }, []);
+
+    // Enqueue a single SSE event — no setState, just buffer + schedule RAF
+    const enqueueEvent = useCallback(
+        (event: ReasoningStreamEvent) => {
+            eventBufferRef.current.push(event);
+            if (!rafRef.current) {
+                rafRef.current = requestAnimationFrame(flushEvents);
+            }
+        },
+        [flushEvents],
+    );
+
+    // Cleanup RAF on unmount
+    useEffect(() => {
+        return () => {
+            if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        };
+    }, []);
+
+    // Derived: progress events for the right panel
+    const progressEvents = useMemo(() => {
+        const filtered = streamEvents.filter((e): e is ReasoningProgressEvent => e.channel === 'progress');
+        console.log('[SSE-DEBUG] progressEvents derived', {
+            totalStreamEvents: streamEvents.length,
+            progressCount: filtered.length,
+            allChannels: [...new Set(streamEvents.map(e => (e as any).channel))],
+            allTypes: [...new Set(streamEvents.map(e => e.type))],
+        });
+        return filtered;
+    }, [streamEvents]);
+
+    // Derived: cell data grouped by cell name
+    const cellDataMap = useMemo(() => {
+        const map = new Map<string, CellReasoningData>();
+        for (const event of streamEvents) {
+            if (event.channel !== 'content') continue;
+            if (event.type === 'plan_field') continue;
+            const cellEvent = event as ReasoningCellContextEvent | ReasoningCellFeaturesEvent | ReasoningCellDecisionEvent;
+            const cell = cellEvent.cell;
+            if (!map.has(cell)) map.set(cell, {});
+            const data = map.get(cell)!;
+            if (event.type === 'cell_context') data.context = event as ReasoningCellContextEvent;
+            else if (event.type === 'cell_features') data.features = event as ReasoningCellFeaturesEvent;
+            else if (event.type === 'cell_decision') data.decision = event as ReasoningCellDecisionEvent;
+        }
+        return map;
+    }, [streamEvents]);
+
+    // Derived: plan field events
+    const planFields = useMemo(
+        () => streamEvents.filter((e): e is ReasoningPlanFieldEvent => e.channel === 'content' && e.type === 'plan_field'),
+        [streamEvents],
+    );
+
+    const startStreaming = useCallback(() => {
+        abortRef.current?.abort();
+        // Flush any pending RAF and reset buffers
+        if (rafRef.current) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = 0;
+        }
+        eventBufferRef.current = [];
+        setStreamEvents([]);
+        setStreamError(null);
+        setStreaming(true);
+
+        const cellNames = cells.map((c) => c.cell_name);
+        if (cellNames.length === 0) {
+            setStreaming(false);
+            return;
+        }
+
+        const request = {
+            task_type: detail?.task_type ?? 'MRO',
+            cells: cellNames,
+            timestamp: detail?.start_time ?? formatTimestamp(new Date()),
+            enable_web_search: false,
+            save_to_db: false,
+        };
+
+        console.log('[SSE-DEBUG] startStreaming called', { cellNames, request });
+        const controller = streamIntentReasoning(
+            request,
+            enqueueEvent,
+            () => {
+                // Flush any remaining buffered events before marking done
+                if (rafRef.current) {
+                    cancelAnimationFrame(rafRef.current);
+                    rafRef.current = 0;
+                }
+                const pending = eventBufferRef.current;
+                if (pending.length > 0) {
+                    eventBufferRef.current = [];
+                    setStreamEvents((prev) => [...prev, ...pending]);
+                }
+                setStreaming(false);
+            },
+            (err) => {
+                setStreamError(err.message);
+                setStreaming(false);
+            },
+        );
+        abortRef.current = controller;
+    }, [cells, detail, enqueueEvent]);
+
+    // Auto-start streaming once data loaded
+    useEffect(() => {
+        if (detail && cells.length > 0 && showReasoning) {
+            startStreaming();
+        }
+        return () => {
+            abortRef.current?.abort();
+        };
+    }, [detail, cells.length, showReasoning, startStreaming]);
 
     // Load all data
     const loadData = useCallback(async () => {
@@ -780,15 +1158,68 @@ const IntentDetailPage = () => {
                     </CardContent>
                 </Card>
             )}
+
+            {/* ── Cell Analysis (bottom-left) & Plan Field (bottom-center) ── */}
+            {showReasoning && (cellDataMap.size > 0 || planFields.length > 0) && (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    {/* Cell Analysis */}
+                    {cellDataMap.size > 0 && (
+                        <Card>
+                            <CardContent className="p-5">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <Zap className="size-4 text-amber-500" />
+                                    <h2 className="text-base font-bold text-foreground">
+                                        Cell Analysis
+                                    </h2>
+                                    <Badge variant="secondary" className="text-xs">
+                                        {cellDataMap.size}
+                                    </Badge>
+                                </div>
+                                <ScrollArea className="max-h-[500px]">
+                                    <div className="space-y-3">
+                                        {Array.from(cellDataMap.entries()).map(([cellName, data]) => (
+                                            <CellAnalysisCard
+                                                key={cellName}
+                                                cellName={cellName}
+                                                data={data}
+                                            />
+                                        ))}
+                                    </div>
+                                </ScrollArea>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Plan Field */}
+                    {planFields.length > 0 && (
+                        <div className="space-y-6">
+                            {planFields.map((plan, i) => (
+                                <PlanFieldCard key={i} plan={plan} />
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Stream error */}
+            {streamError && (
+                <div className="p-3 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20">
+                    <p className="text-sm text-red-700 dark:text-red-400 mb-2">{streamError}</p>
+                    <Button variant="outline" size="sm" onClick={startStreaming}>
+                        Retry
+                    </Button>
+                </div>
+            )}
         </div>
 
-        {/* ── Live Reasoning Panel ───────────────────── */}
+        {/* ── Live Reasoning Panel (right sidebar — progress only) ── */}
         {showReasoning && (
             <div className="w-[420px] border-l border-border shrink-0 bg-background hidden xl:flex">
                 <LiveReasoningPanel
-                    cells={cells.map((c) => c.cell_name)}
+                    events={progressEvents}
+                    streaming={streaming}
                     taskType={detail.task_type}
-                    timestamp={detail.start_time ?? undefined}
+                    onReconnect={startStreaming}
                 />
             </div>
         )}

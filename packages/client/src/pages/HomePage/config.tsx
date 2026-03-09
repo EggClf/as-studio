@@ -7,6 +7,7 @@ import {
     RadioIcon,
     RouteIcon,
     Tag,
+    NetworkIcon,
 } from 'lucide-react';
 import { LucideIcon } from 'lucide-react';
 import { ComponentType, SVGProps } from 'react';
@@ -108,6 +109,11 @@ export const getSidebarItems = (t: (key: string) => string): SidebarGroup[] => [
                 title: t('common.vulcan'),
                 icon: RadioIcon,
                 url: RouterPath.VULCAN,
+            },
+            {
+                title: t('common.topology'),
+                icon: NetworkIcon,
+                url: RouterPath.TOPOLOGY,
             },
         ],
     },

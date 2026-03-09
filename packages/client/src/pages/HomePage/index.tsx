@@ -15,6 +15,7 @@ import { StudioSidebarProvider } from '@/context/SidebarContext.tsx';
 import StudioSidebar from '@/pages/HomePage/sidebar.tsx';
 import TracePage from '../TracePage/index.tsx';
 import VulcanPage from '../VulcanPage';
+import TopologyPage from '../TopologyPage';
 
 const HomePage = () => {
     const { t } = useTranslation();
@@ -83,6 +84,10 @@ const HomePage = () => {
                     <Route
                         path={`${RouterPath.VULCAN}/*`}
                         element={<VulcanPage />}
+                    />
+                    <Route
+                        path={`${RouterPath.TOPOLOGY}/*`}
+                        element={<TopologyPage />}
                     />
                     <Route
                         path="*"

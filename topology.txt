@@ -1,0 +1,183 @@
+"""
+Cell Info API.
+
+Exposes read-oriented endpoints over the cell_info table joined with city.
+No FK constraint between cell_info.city_code and city.city_code is enforced
+in the DB (some rows are missing), so all joins are LEFT JOINs.
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+
+from icflow.utils.postgres import get_postgres_client, PostgresClient
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/cell-info",
+    tags=["cell-info"],
+    responses={404: {"description": "Not found"}},
+)
+
+
+# ---------------------------------------------------------------------------
+# Dependency
+# ---------------------------------------------------------------------------
+
+async def get_db() -> PostgresClient:
+    client = get_postgres_client()
+    await client.connect()
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+class CityInfo(BaseModel):
+    """City details joined from the city table (nullable when no matching row)."""
+    city_code: Optional[str]
+    city_name: Optional[str]
+    city_number_id: Optional[str]
+
+
+class CellInfoRow(BaseModel):
+    """Cell info row with embedded city details."""
+    cell_name: str
+    cell_identity: Optional[int]
+    station_name: Optional[str]
+    cu_ip: Optional[str]
+    sector: Optional[int]
+    longitude: Optional[float]
+    latitude: Optional[float]
+    city: Optional[CityInfo]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _row_to_cell_info(row) -> Dict[str, Any]:
+    """Convert asyncpg Record to CellInfoRow-compatible dict."""
+    d = dict(row)
+    city_code = d.pop("city_code", None)
+    city_name = d.pop("city_name", None)
+    city_number_id = d.pop("city_number_id", None)
+
+    # Only populate city sub-object when at least city_code is present
+    if city_code is not None:
+        d["city"] = {
+            "city_code": city_code,
+            "city_name": city_name,
+            "city_number_id": city_number_id,
+        }
+    else:
+        d["city"] = None
+
+    return d
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "",
+    response_model=List[CellInfoRow],
+    summary="List all cells with city info",
+    description=(
+        "**Business question:** What cells exist in the network and which city does "
+        "each belong to? Returns cell metadata joined with city details via a LEFT JOIN "
+        "(cells without a matching city row will have `city=null`)."
+    ),
+)
+async def list_cells(
+    city_code: Optional[str] = Query(None, description="Filter by exact city_code"),
+    station_name: Optional[str] = Query(None, description="Filter by station name (case-insensitive partial match)"),
+    search: Optional[str] = Query(None, description="Search across cell_name and station_name (case-insensitive)"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: PostgresClient = Depends(get_db),
+):
+    conditions: List[str] = []
+    params: List[Any] = []
+    idx = 1
+
+    if city_code:
+        conditions.append(f"ci.city_code = ${idx}")
+        params.append(city_code)
+        idx += 1
+    if station_name:
+        conditions.append(f"ci.station_name ILIKE ${idx}")
+        params.append(f"%{station_name}%")
+        idx += 1
+    if search:
+        conditions.append(f"(ci.cell_name ILIKE ${idx} OR ci.station_name ILIKE ${idx})")
+        params.append(f"%{search}%")
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"""
+        SELECT
+            ci.cell_name,
+            ci.cell_identity,
+            ci.station_name,
+            ci.cu_ip,
+            ci.sector,
+            ci.longitude,
+            ci.latitude,
+            ci.city_code,
+            c.city_name,
+            c.city_number_id
+        FROM cell_info ci
+        LEFT JOIN city c ON ci.city_code = c.city_code
+        {where}
+        ORDER BY ci.cell_name
+        LIMIT ${idx} OFFSET ${idx + 1}
+    """
+    params += [limit, offset]
+
+    async with db.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+
+    return [_row_to_cell_info(r) for r in rows]
+
+
+@router.get(
+    "/{cell_name}",
+    response_model=CellInfoRow,
+    summary="Get cell info by name",
+    description=(
+        "**Business question:** What is the full metadata for this specific cell — "
+        "including its geographic coordinates, sector, and the city it belongs to?"
+    ),
+)
+async def get_cell(cell_name: str, db: PostgresClient = Depends(get_db)):
+    query = """
+        SELECT
+            ci.cell_name,
+            ci.cell_identity,
+            ci.station_name,
+            ci.cu_ip,
+            ci.sector,
+            ci.longitude,
+            ci.latitude,
+            ci.city_code,
+            c.city_name,
+            c.city_number_id
+        FROM cell_info ci
+        LEFT JOIN city c ON ci.city_code = c.city_code
+        WHERE ci.cell_name = $1
+    """
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(query, cell_name)
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cell '{cell_name}' not found",
+        )
+    return _row_to_cell_info(row)

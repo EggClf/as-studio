@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
     ChevronDown,
     ChevronUp,
@@ -17,8 +17,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { formatTimestamp } from './api';
-import type { SystemScanEvent } from './types';
+import { streamSystemScan, formatTimestamp } from './api';
+import type { SystemScanEvent, SystemScanRequest } from './types';
 
 // ── constants ───────────────────────────────────────────
 
@@ -333,219 +333,193 @@ const PayloadResult = ({
     );
 };
 
-// ── Process Timeline (right panel) ──────────────────────
+// ── main component ──────────────────────────────────────
 
-interface ProcessTimelineProps {
+interface Props {
     cellName?: string | null;
     selectedDate: Date;
-    events: SystemScanEvent[];
-    streaming: boolean;
-    error: string | null;
-    onRetry: () => void;
 }
 
-export const ProcessTimeline = memo(
-    ({
-        cellName,
-        selectedDate,
-        events,
-        streaming,
-        error,
-        onRetry,
-    }: ProcessTimelineProps) => {
-        const scrollRef = useRef<HTMLDivElement | null>(null);
+const ContextSnapshotPanel = ({ cellName, selectedDate }: Props) => {
+    const [events, setEvents] = useState<SystemScanEvent[]>([]);
+    const [payload, setPayload] = useState<Record<string, unknown> | null>(
+        null,
+    );
+    const [streaming, setStreaming] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [modal, setModal] = useState<{
+        column: string;
+        value: string;
+    } | null>(null);
 
-        useEffect(() => {
-            scrollRef.current?.scrollIntoView({
-                behavior: 'smooth',
-                block: 'end',
-            });
-        }, [events]);
+    const abortRef = useRef<AbortController | null>(null);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
 
-        if (!cellName) {
-            return (
-                <div className="flex flex-col items-center gap-3 py-12 text-center">
-                    <Database className="size-10 text-muted-foreground/40" />
-                    <p className="text-sm text-muted-foreground">
-                        Select a cell to view process
-                    </p>
-                </div>
-            );
+    const startScan = useCallback(() => {
+        if (!cellName) return;
+
+        // Abort previous stream
+        abortRef.current?.abort();
+        setEvents([]);
+        setPayload(null);
+        setError(null);
+        setStreaming(true);
+
+        const request: SystemScanRequest = {
+            task_type: 'MRO',
+            cells: [cellName],
+            timestamp: formatTimestamp(selectedDate),
+            enable_web_search: false,
+            save_to_db: false,
+        };
+
+        const controller = streamSystemScan(
+            request,
+            (event) => {
+                setEvents((prev) => [...prev, event]);
+                if (event.type === 'done' && event.payload) {
+                    setPayload(event.payload);
+                }
+                if (event.type === 'error') {
+                    setError(event.text);
+                }
+            },
+            () => setStreaming(false),
+            (err) => {
+                setError(err.message);
+                setStreaming(false);
+            },
+        );
+
+        abortRef.current = controller;
+    }, [cellName, selectedDate]);
+
+    // Start scan when cell or date changes
+    useEffect(() => {
+        if (cellName) {
+            startScan();
+        } else {
+            // Reset when cell deselected
+            abortRef.current?.abort();
+            setEvents([]);
+            setPayload(null);
+            setError(null);
+            setStreaming(false);
         }
+        return () => {
+            abortRef.current?.abort();
+        };
+    }, [cellName, selectedDate, startScan]);
 
-        const dateStr = formatTimestamp(selectedDate).slice(0, 10);
+    // Auto-scroll events
+    useEffect(() => {
+        scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, [events]);
 
+    // ── empty state ─────────────────────────────────────
+    if (!cellName) {
         return (
-            <div className="flex flex-col gap-4">
-                {/* Header */}
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-2">
-                        <Database className="size-5 text-primary-500" />
-                        <h2 className="text-base font-semibold text-foreground">
-                            Process
-                        </h2>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">
-                            {dateStr}
-                        </span>
-                        <Badge variant="secondary" className="text-xs">
-                            {cellName}
-                        </Badge>
-                        {!streaming && events.length > 0 && (
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-7"
-                                onClick={onRetry}
-                                title="Re-run scan"
-                            >
-                                <RefreshCw className="size-3.5" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-
-                {/* Streaming events timeline */}
-                <ScrollArea className="max-h-[calc(100vh-240px)]">
-                    <div className="flex flex-col gap-1.5">
-                        {events.map((evt, i) => (
-                            <EventRow key={i} event={evt} />
-                        ))}
-                        {streaming && (
-                            <div className="flex items-center gap-2 px-3 py-2">
-                                <Loader2 className="size-4 animate-spin text-primary" />
-                                <span className="text-xs text-muted-foreground">
-                                    Processing…
-                                </span>
-                            </div>
-                        )}
-                        <div ref={scrollRef} />
-                    </div>
-                </ScrollArea>
-
-                {/* Error retry */}
-                {error && !streaming && (
-                    <div className="text-center">
-                        <Button variant="outline" size="sm" onClick={onRetry}>
-                            Retry
-                        </Button>
-                    </div>
-                )}
+            <div className="flex flex-col items-center gap-3 py-12 text-center">
+                <Database className="size-10 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">
+                    Select a cell to view context snapshot
+                </p>
             </div>
         );
-    },
-);
+    }
 
-ProcessTimeline.displayName = 'ProcessTimeline';
+    const dateStr = formatTimestamp(selectedDate).slice(0, 10);
 
-// ── Content Result (bottom left + center) ───────────────
-
-interface ContentResultPanelProps {
-    cellName?: string | null;
-    payload: Record<string, unknown> | null;
-}
-
-export const ContentResultPanel = memo(
-    ({ cellName, payload }: ContentResultPanelProps) => {
-        const [modal, setModal] = useState<{
-            column: string;
-            value: string;
-        } | null>(null);
-
-        if (!cellName || !payload) {
-            return (
-                <div className="flex flex-col items-center gap-3 py-12 text-center">
-                    <Database className="size-10 text-muted-foreground/40" />
-                    <p className="text-sm text-muted-foreground">
-                        {!cellName
-                            ? 'Select a cell to view context snapshot'
-                            : 'Waiting for scan results…'}
-                    </p>
-                </div>
-            );
-        }
-
-        return (
-            <div className="flex flex-col gap-4">
+    return (
+        <div className="flex flex-col gap-4">
+            {/* Header */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
                     <Database className="size-5 text-primary-500" />
                     <h2 className="text-base font-semibold text-foreground">
                         Context Snapshot
                     </h2>
-                    <Badge variant="secondary" className="text-xs ml-auto">
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                        {dateStr}
+                    </span>
+                    <Badge variant="secondary" className="text-xs">
                         {cellName}
                     </Badge>
+                    {!streaming && events.length > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            onClick={startScan}
+                            title="Re-run scan"
+                        >
+                            <RefreshCw className="size-3.5" />
+                        </Button>
+                    )}
                 </div>
+            </div>
 
+            {/* Streaming events timeline */}
+            <ScrollArea className="max-h-[200px]">
+                <div className="flex flex-col gap-1.5">
+                    {events.map((evt, i) => (
+                        <EventRow key={i} event={evt} />
+                    ))}
+                    {streaming && (
+                        <div className="flex items-center gap-2 px-3 py-2">
+                            <Loader2 className="size-4 animate-spin text-primary" />
+                            <span className="text-xs text-muted-foreground">
+                                Processing…
+                            </span>
+                        </div>
+                    )}
+                    <div ref={scrollRef} />
+                </div>
+            </ScrollArea>
+
+            {/* Error retry */}
+            {error && !streaming && (
+                <div className="text-center">
+                    <Button variant="outline" size="sm" onClick={startScan}>
+                        Retry
+                    </Button>
+                </div>
+            )}
+
+            {/* Payload result */}
+            {payload && (
                 <PayloadResult
                     payload={payload}
                     onExpandDetail={(col, val) =>
                         setModal({ column: col, value: val })
                     }
                 />
+            )}
 
-                {/* JSON detail dialog */}
-                <Dialog
-                    open={!!modal}
-                    onOpenChange={(open) => !open && setModal(null)}
-                >
-                    <DialogContent className="max-w-2xl">
-                        <DialogHeader>
-                            <DialogTitle className="flex items-center gap-2">
-                                <Eye className="size-4" />
-                                {modal?.column
-                                    .replace(/_/g, ' ')
-                                    .replace(/\b\w/g, (c) => c.toUpperCase())}
-                            </DialogTitle>
-                        </DialogHeader>
-                        {modal && (
-                            <JsonDetailContent
-                                column={modal.column}
-                                value={modal.value}
-                            />
-                        )}
-                    </DialogContent>
-                </Dialog>
-            </div>
-        );
-    },
-);
-
-ContentResultPanel.displayName = 'ContentResultPanel';
-
-// ── Legacy default export (still works as before) ───────
-
-interface Props {
-    cellName?: string | null;
-    selectedDate: Date;
-    events: SystemScanEvent[];
-    payload: Record<string, unknown> | null;
-    streaming: boolean;
-    error: string | null;
-    onRetry: () => void;
-}
-
-const ContextSnapshotPanel = ({
-    cellName,
-    selectedDate,
-    events,
-    payload,
-    streaming,
-    error,
-    onRetry,
-}: Props) => {
-    return (
-        <div className="flex flex-col gap-6">
-            <ProcessTimeline
-                cellName={cellName}
-                selectedDate={selectedDate}
-                events={events}
-                streaming={streaming}
-                error={error}
-                onRetry={onRetry}
-            />
-            <ContentResultPanel cellName={cellName} payload={payload} />
+            {/* JSON detail dialog */}
+            <Dialog
+                open={!!modal}
+                onOpenChange={(open) => !open && setModal(null)}
+            >
+                <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Eye className="size-4" />
+                            {modal?.column
+                                .replace(/_/g, ' ')
+                                .replace(/\b\w/g, (c) => c.toUpperCase())}
+                        </DialogTitle>
+                    </DialogHeader>
+                    {modal && (
+                        <JsonDetailContent
+                            column={modal.column}
+                            value={modal.value}
+                        />
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     );
 };

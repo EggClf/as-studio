@@ -1,0 +1,505 @@
+import asyncio
+import json
+import uuid
+import random
+from datetime import datetime
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse, HTMLResponse
+
+app = FastAPI()
+
+# ── SSE bus ──────────────────────────────────────────────────────────────────
+subscribers: list[asyncio.Queue] = []
+
+async def broadcast(event: dict):
+    for q in subscribers:
+        await q.put(event)
+
+# ── Product data pool ─────────────────────────────────────────────────────────
+PRODUCTS = [
+    {
+        "id": "PRD-001",
+        "name": "Wireless Noise-Cancelling Headphones",
+        "brand": "SoundCore",
+        "category": "Electronics",
+        "price": 149.99,
+        "currency": "USD",
+        "rating": 4.7,
+        "reviews": 2341,
+        "in_stock": True,
+        "tags": ["wireless", "noise-cancelling", "bluetooth"],
+        "description": "Premium over-ear headphones with 40h battery life and adaptive ANC.",
+        "image_color": "#6366f1",
+        "icon": "🎧",
+    },
+    {
+        "id": "PRD-002",
+        "name": "Ergonomic Mesh Office Chair",
+        "brand": "ComfortPro",
+        "category": "Furniture",
+        "price": 399.00,
+        "currency": "USD",
+        "rating": 4.5,
+        "reviews": 876,
+        "in_stock": True,
+        "tags": ["ergonomic", "lumbar-support", "mesh"],
+        "description": "Fully adjustable chair with lumbar support, breathable mesh back.",
+        "image_color": "#0ea5e9",
+        "icon": "🪑",
+    },
+    {
+        "id": "PRD-003",
+        "name": "Mechanical Keyboard TKL",
+        "brand": "KeyForge",
+        "category": "Peripherals",
+        "price": 89.95,
+        "currency": "USD",
+        "rating": 4.8,
+        "reviews": 5120,
+        "in_stock": False,
+        "tags": ["mechanical", "tkl", "rgb", "tactile"],
+        "description": "Tenkeyless mechanical keyboard with Cherry MX Brown switches and per-key RGB.",
+        "image_color": "#f59e0b",
+        "icon": "⌨️",
+    },
+    {
+        "id": "PRD-004",
+        "name": "Smart Air Purifier Pro",
+        "brand": "CleanAir",
+        "category": "Home Appliances",
+        "price": 219.00,
+        "currency": "USD",
+        "rating": 4.6,
+        "reviews": 1430,
+        "in_stock": True,
+        "tags": ["hepa", "smart", "wifi", "quiet"],
+        "description": "HEPA H13 filter with real-time AQI monitoring and app control.",
+        "image_color": "#10b981",
+        "icon": "💨",
+    },
+    {
+        "id": "PRD-005",
+        "name": "Portable Espresso Maker",
+        "brand": "BrewGo",
+        "category": "Kitchen",
+        "price": 64.50,
+        "currency": "USD",
+        "rating": 4.4,
+        "reviews": 3089,
+        "in_stock": True,
+        "tags": ["espresso", "portable", "manual", "travel"],
+        "description": "Hand-powered 18-bar pressure espresso maker. No electricity needed.",
+        "image_color": "#ef4444",
+        "icon": "☕",
+    },
+]
+
+# Ordered field keys — streamed one at a time to simulate progressive reveal
+FIELD_ORDER = [
+    "id", "name", "brand", "category", "price", "currency",
+    "rating", "reviews", "in_stock", "tags", "description",
+]
+
+async def stream_product(session_id: str, product: dict):
+    """Stream a product field-by-field with short delays."""
+    for key in FIELD_ORDER:
+        if key not in product:
+            continue
+        await asyncio.sleep(random.uniform(0.25, 0.55))
+        await broadcast({
+            "event": "product_field",
+            "session_id": session_id,
+            "key": key,
+            "value": product[key],
+        })
+
+async def run_workflow(session_id: str):
+    product = random.choice(PRODUCTS)
+    label   = f"Run #{session_id[:6].upper()}"
+    started = datetime.now().strftime("%H:%M:%S")
+
+    # Workflow steps, each emits status then streams one product
+    STEPS = [
+        ("search",   "🔍", "Searching product catalogue..."),
+        ("validate", "🔎", "Validating product data..."),
+        ("enrich",   "✨", "Enriching with live inventory..."),
+        ("done",     "✅", "Product record ready"),
+    ]
+
+    await broadcast({
+        "event": "session_start",
+        "session_id": session_id,
+        "label": label,
+        "started": started,
+        "icon": product["icon"],
+        "color": product["image_color"],
+    })
+
+    await asyncio.sleep(0.3)
+
+    for i, (kind, icon, text) in enumerate(STEPS):
+        await asyncio.sleep(random.uniform(0.5, 1.0))
+
+        await broadcast({
+            "event": "step",
+            "session_id": session_id,
+            "step_index": i,
+            "type": kind,
+            "icon": icon,
+            "text": text,
+            "status": "running",
+        })
+
+        # On the last real step, stream product fields into the card
+        if kind == "enrich":
+            await stream_product(session_id, product)
+
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        await broadcast({
+            "event": "step",
+            "session_id": session_id,
+            "step_index": i,
+            "type": kind,
+            "icon": icon,
+            "text": text,
+            "status": "done" if kind != "done" else "done",
+        })
+
+    await broadcast({"event": "session_end", "session_id": session_id})
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.post("/run")
+async def trigger_run():
+    sid = str(uuid.uuid4())
+    asyncio.create_task(run_workflow(sid))
+    return {"session_id": sid}
+
+@app.get("/events")
+async def events():
+    q: asyncio.Queue = asyncio.Queue()
+    subscribers.append(q)
+    async def generate():
+        try:
+            while True:
+                payload = await q.get()
+                yield f"data: {json.dumps(payload)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            subscribers.remove(q)
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workflow Tracker</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #08080d;
+  --panel:   #0e0e18;
+  --surface: #12121e;
+  --raised:  #181828;
+  --border:  #1e1e32;
+  --accent:  #7c6af7;
+  --text:    #e0e0f8;
+  --muted:   #4e4e72;
+  --done:    #4ade80;
+  --running: #facc15;
+  --error:   #f87171;
+  --font:    'Segoe UI', Ubuntu, Cantarell, sans-serif;
+  --mono:    'Ubuntu Mono', 'DejaVu Sans Mono', monospace;
+}
+body {
+  background: var(--bg); color: var(--text);
+  font-family: var(--font); min-height: 100vh;
+  display: grid; grid-template-rows: auto 1fr;
+}
+
+/* ── Header ── */
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .9rem 2rem; border-bottom: 1px solid var(--border);
+  background: var(--panel); position: sticky; top: 0; z-index: 20;
+}
+header h1 { font-size: .9rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.hdr-right { display: flex; align-items: center; gap: .9rem; }
+#conn { font-family: var(--mono); font-size: .7rem; color: var(--muted); display: flex; align-items: center; gap: .35rem; }
+#dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: background .3s; }
+#dot.live { background: var(--done); box-shadow: 0 0 5px var(--done); }
+button {
+  padding: .45rem 1.1rem; border: none; border-radius: 7px;
+  background: var(--accent); color: #fff;
+  font-family: var(--font); font-size: .82rem; font-weight: 700;
+  cursor: pointer; transition: opacity .15s, transform .1s;
+}
+button:hover { opacity: .85; }
+button:active { transform: scale(.97); }
+
+/* ── Feed ── */
+#feed {
+  padding: 1.5rem 2rem; display: flex; flex-direction: column;
+  gap: 1.5rem; overflow-y: auto; max-width: 900px; width: 100%; margin: 0 auto;
+}
+#empty { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 3rem; }
+
+/* ── Workflow card ── */
+.wf-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; overflow: hidden;
+  animation: slideIn .3s ease both;
+}
+@keyframes slideIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+
+.wf-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .75rem 1.1rem; border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,.025);
+}
+.wf-title { display: flex; align-items: center; gap: .6rem; }
+.wf-icon { font-size: 1.2rem; }
+.wf-label { font-family: var(--mono); font-size: .72rem; font-weight: 600; color: var(--accent); letter-spacing: .07em; }
+.wf-time  { font-family: var(--mono); font-size: .68rem; color: var(--muted); }
+.wf-status { font-family: var(--mono); font-size: .68rem; color: var(--muted); display: flex; align-items: center; gap: .3rem; }
+.spin { display: inline-block; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Steps timeline ── */
+.wf-body { display: grid; grid-template-columns: 220px 1fr; }
+
+.steps-col {
+  padding: .9rem .8rem;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: .45rem;
+}
+.step-row {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .4rem .6rem; border-radius: 7px;
+  font-size: .8rem; color: var(--muted);
+  transition: background .2s, color .2s;
+}
+.step-row.running { background: rgba(250,204,21,.07); color: var(--running); }
+.step-row.done    { color: var(--done); }
+.step-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--muted); flex-shrink: 0;
+  transition: background .2s;
+}
+.step-row.running .step-dot { background: var(--running); box-shadow: 0 0 4px var(--running); }
+.step-row.done    .step-dot { background: var(--done); }
+.step-label { font-size: .78rem; }
+
+/* ── Product card (right column) ── */
+.product-col { padding: 1rem 1.2rem; }
+
+.product-card {
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--raised); overflow: hidden;
+  min-height: 180px;
+}
+
+/* colour bar */
+.pc-bar {
+  height: 5px; width: 100%;
+  background: var(--accent);
+  transition: background .5s;
+}
+
+.pc-body { padding: .9rem 1rem; display: flex; flex-direction: column; gap: .55rem; }
+
+/* each field row fades in */
+.pc-field { animation: fieldIn .25s ease both; }
+@keyframes fieldIn { from{opacity:0;transform:translateX(-4px)} to{opacity:1;transform:translateX(0)} }
+
+.pc-name   { font-size: 1.05rem; font-weight: 700; color: var(--text); line-height: 1.3; }
+.pc-brand  { font-size: .78rem; color: var(--muted); }
+.pc-cat    { display: inline-block; font-size: .68rem; font-family: var(--mono); padding: .1rem .45rem; border-radius: 4px; background: rgba(124,106,247,.15); color: var(--accent); }
+.pc-price  { font-size: 1.2rem; font-weight: 700; color: var(--text); }
+.pc-rating { font-size: .8rem; color: var(--running); }
+.pc-stock-true  { font-size: .75rem; color: var(--done); font-family: var(--mono); }
+.pc-stock-false { font-size: .75rem; color: var(--error); font-family: var(--mono); }
+.pc-tags   { display: flex; flex-wrap: wrap; gap: .3rem; }
+.pc-tag    { font-size: .68rem; font-family: var(--mono); padding: .1rem .4rem; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); color: var(--muted); }
+.pc-desc   { font-size: .8rem; color: var(--muted); line-height: 1.5; }
+
+/* skeleton placeholder */
+.skeleton {
+  display: flex; flex-direction: column; gap: .6rem;
+  padding: .9rem 1rem; opacity: .35;
+}
+.skel-line {
+  height: .75rem; border-radius: 4px; background: var(--border);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  0%   { opacity: .35; }
+  50%  { opacity: .65; }
+  100% { opacity: .35; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Workflow Tracker</h1>
+  <div class="hdr-right">
+    <span id="conn"><span id="dot"></span>connecting…</span>
+    <button onclick="triggerRun()">▶ Run Workflow</button>
+  </div>
+</header>
+
+<div id="feed">
+  <p id="empty">No runs yet — hit <strong>Run Workflow</strong> to start.</p>
+</div>
+
+<script>
+const runs = {}; // session_id → { stepEls, pcBody, pcBar }
+
+const es = new EventSource('/events');
+es.onopen = () => {
+  document.getElementById('dot').classList.add('live');
+  document.getElementById('conn').innerHTML = '<span id="dot" class="live"></span>connected';
+};
+es.onerror = () => {
+  document.getElementById('dot')?.classList.remove('live');
+  document.getElementById('conn').textContent = 'disconnected';
+};
+es.onmessage = ({ data }) => {
+  const m = JSON.parse(data);
+  ({ session_start, step, product_field, session_end }[m.event] || (() => {}))(m);
+};
+
+// ── session_start ──────────────────────────────────────────────────────────
+function session_start({ session_id, label, started, icon, color }) {
+  document.getElementById('empty')?.remove();
+
+  const card = document.createElement('div');
+  card.className = 'wf-card';
+  card.innerHTML = `
+    <div class="wf-header">
+      <div class="wf-title">
+        <span class="wf-icon">${icon}</span>
+        <span class="wf-label">${label}</span>
+        <span class="wf-time">${started}</span>
+      </div>
+      <span class="wf-status" id="wfst-${session_id}">
+        <span class="spin">⟳</span> running
+      </span>
+    </div>
+    <div class="wf-body">
+      <div class="steps-col" id="steps-${session_id}"></div>
+      <div class="product-col">
+        <div class="product-card" id="pc-${session_id}">
+          <div class="pc-bar" id="pcbar-${session_id}" style="background:${color}"></div>
+          <div class="skeleton">
+            <div class="skel-line" style="width:60%"></div>
+            <div class="skel-line" style="width:40%"></div>
+            <div class="skel-line" style="width:80%"></div>
+            <div class="skel-line" style="width:55%"></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('feed').insertBefore(card, document.getElementById('feed').firstChild);
+
+  runs[session_id] = {
+    stepEls: {},
+    pc: document.getElementById(`pc-${session_id}`),
+    pcBar: document.getElementById(`pcbar-${session_id}`),
+    pcBody: null,   // created on first product_field
+    color,
+    fields: {},
+  };
+}
+
+// ── step ───────────────────────────────────────────────────────────────────
+function step({ session_id, step_index, icon, text, status }) {
+  const r = runs[session_id]; if (!r) return;
+  const stepsCol = document.getElementById(`steps-${session_id}`);
+
+  let row = r.stepEls[step_index];
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'step-row';
+    row.innerHTML = `<span class="step-dot"></span><span class="step-icon">${icon}</span><span class="step-label">${text}</span>`;
+    stepsCol.appendChild(row);
+    r.stepEls[step_index] = row;
+  }
+
+  row.className = `step-row ${status}`;
+}
+
+// ── product_field ──────────────────────────────────────────────────────────
+function product_field({ session_id, key, value }) {
+  const r = runs[session_id]; if (!r) return;
+
+  // Replace skeleton with real body on first field
+  if (!r.pcBody) {
+    r.pc.innerHTML = `<div class="pc-bar" style="background:${r.color}"></div><div class="pc-body" id="pcbody-${session_id}"></div>`;
+    r.pcBody = document.getElementById(`pcbody-${session_id}`);
+  }
+
+  r.fields[key] = value;
+  renderProductCard(r);
+}
+
+// Renders the product card from whatever fields have arrived so far
+function renderProductCard(r) {
+  const f = r.fields;
+  const b = r.pcBody;
+  b.innerHTML = '';
+
+  const add = (cls, html) => {
+    const d = document.createElement('div');
+    d.className = `pc-field ${cls}`;
+    d.innerHTML = html;
+    b.appendChild(d);
+  };
+
+  if (f.name)        add('pc-name',  f.name);
+  if (f.brand)       add('pc-brand', f.brand);
+  if (f.category)    add('', `<span class="pc-cat">${f.category}</span>`);
+
+  if (f.price != null) {
+    const cur = f.currency || '';
+    add('pc-price', `${cur} ${f.price.toFixed(2)}`);
+  }
+
+  if (f.rating != null) {
+    const stars = '★'.repeat(Math.round(f.rating)) + '☆'.repeat(5 - Math.round(f.rating));
+    const rev = f.reviews != null ? ` · ${f.reviews.toLocaleString()} reviews` : '';
+    add('pc-rating', `${stars} ${f.rating}${rev}`);
+  }
+
+  if (f.in_stock != null) {
+    const cls = f.in_stock ? 'pc-stock-true' : 'pc-stock-false';
+    const txt = f.in_stock ? '● In stock' : '○ Out of stock';
+    add(cls, txt);
+  }
+
+  if (f.tags?.length) {
+    add('pc-tags', f.tags.map(t => `<span class="pc-tag">${t}</span>`).join(''));
+  }
+
+  if (f.description) add('pc-desc', f.description);
+}
+
+// ── session_end ────────────────────────────────────────────────────────────
+function session_end({ session_id }) {
+  const r = runs[session_id]; if (!r) return;
+  const st = document.getElementById(`wfst-${session_id}`);
+  if (st) { st.innerHTML = '✓ done'; st.style.color = 'var(--done)'; }
+}
+
+async function triggerRun() {
+  await fetch('/run', { method: 'POST' });
+}
+</script>
+</body>
+</html>"""

@@ -3,9 +3,10 @@ import { Card, CardContent } from '@/components/ui/card';
 import PageTitleSpan from '@/components/spans/PageTitleSpan';
 import { Activity } from 'lucide-react';
 import NetworkCellsTable from './NetworkCellsTable';
-import ContextSnapshotPanel from './ContextSnapshotPanel';
+import { ProcessTimeline, ContentResultPanel } from './ContextSnapshotPanel';
 import DecisionTreeTracePanel from './DecisionTreeTracePanel';
 import PlannerOutputPanel from './PlannerOutputPanel';
+import { useSystemScan } from './useSystemScan';
 import {
     fetchNetworkScan,
     extractMLFeatures,
@@ -138,23 +139,19 @@ const VulcanPage = () => {
         }
     }, [selectedModel]);
 
+    // ── SSE streaming (lives at page level so layout splits don't break it) ──
+    const { events, payload, streaming, error, startScan } = useSystemScan(
+        selectedCell?.cellname,
+        selectedDate,
+    );
+
     // ── Render ──────────────────────────────────────────
     return (
         <div className="flex flex-col gap-6 p-6 h-full overflow-auto">
             <PageTitleSpan title="Context Snapshot" />
 
-            <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6">
-                {/* Left — Context Snapshot */}
-                <Card className="xl:max-h-[calc(100vh-140px)] overflow-hidden">
-                    <CardContent className="p-4 overflow-auto max-h-[calc(100vh-160px)]">
-                        <ContextSnapshotPanel
-                            cellName={selectedCell?.cellname}
-                            selectedDate={selectedDate}
-                        />
-                    </CardContent>
-                </Card>
-
-                {/* Right — Network Cells Table */}
+            <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6">
+                {/* Left — Network Cells Table */}
                 <Card>
                     <CardContent className="p-4">
                         <NetworkCellsTable
@@ -165,6 +162,20 @@ const VulcanPage = () => {
                             onCellClick={handleCellClick}
                             onBatchPredict={handleBatchPredict}
                             batchLoading={batchLoading}
+                        />
+                    </CardContent>
+                </Card>
+
+                {/* Right — Process Timeline (SSE events) */}
+                <Card className="xl:max-h-[calc(100vh-140px)] overflow-hidden">
+                    <CardContent className="p-4 overflow-auto max-h-[calc(100vh-160px)]">
+                        <ProcessTimeline
+                            cellName={selectedCell?.cellname}
+                            selectedDate={selectedDate}
+                            events={events}
+                            streaming={streaming}
+                            error={error}
+                            onRetry={startScan}
                         />
                     </CardContent>
                 </Card>
@@ -181,29 +192,44 @@ const VulcanPage = () => {
                 </div>
             )}
 
-            {/* Decision Tree Trace */}
-            {decisionTraceLoading ? (
-                <div className="bg-card rounded-lg border border-border shadow-sm p-8">
-                    <div className="flex items-center justify-center gap-3">
-                        <Activity className="w-6 h-6 animate-pulse text-primary" />
-                        <span className="text-muted-foreground">Loading decision trace from ML model…</span>
-                    </div>
-                </div>
-            ) : batchResult || decisionTrace ? (
-                <DecisionTreeTracePanel
-                    trace={decisionTrace ?? undefined}
-                    batchResult={batchResult ?? undefined}
-                />
-            ) : (
-                <div className="bg-card rounded-lg border border-border shadow-sm p-8 text-center text-muted-foreground">
-                    <Activity className="w-16 h-16 mx-auto mb-4 opacity-30" />
-                    <h3 className="text-lg font-semibold text-foreground mb-2">No Analysis Selected</h3>
-                    <p className="text-sm">
-                        Click any cell above to run ML prediction, or use{' '}
-                        <strong>Run All</strong> to process all cells at once.
-                    </p>
-                </div>
-            )}
+            {/* Bottom: Content Snapshot (left+center) + Decision Tree */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                {/* Bottom Left — Context Snapshot Content */}
+                <Card>
+                    <CardContent className="p-4">
+                        <ContentResultPanel
+                            cellName={selectedCell?.cellname}
+                            payload={payload}
+                        />
+                    </CardContent>
+                </Card>
+
+                {/* Bottom Center — Decision Tree Trace */}
+                <Card>
+                    <CardContent className="p-4">
+                        {decisionTraceLoading ? (
+                            <div className="flex items-center justify-center gap-3 p-8">
+                                <Activity className="w-6 h-6 animate-pulse text-primary" />
+                                <span className="text-muted-foreground">Loading decision trace from ML model…</span>
+                            </div>
+                        ) : batchResult || decisionTrace ? (
+                            <DecisionTreeTracePanel
+                                trace={decisionTrace ?? undefined}
+                                batchResult={batchResult ?? undefined}
+                            />
+                        ) : (
+                            <div className="p-8 text-center text-muted-foreground">
+                                <Activity className="w-16 h-16 mx-auto mb-4 opacity-30" />
+                                <h3 className="text-lg font-semibold text-foreground mb-2">No Analysis Selected</h3>
+                                <p className="text-sm">
+                                    Click any cell above to run ML prediction, or use{' '}
+                                    <strong>Run All</strong> to process all cells at once.
+                                </p>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
 
             {/* Action Planner */}
             <PlannerOutputPanel planResponse={planData} loading={planLoading} />

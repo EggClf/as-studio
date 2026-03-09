@@ -97,16 +97,11 @@ export function streamSystemScan(
             const decoder = new TextDecoder();
             let buffer = '';
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const parts = buffer.split('\n\n');
-                buffer = parts.pop() ?? '';
-
+            const flushBuffer = (buf: string) => {
+                // Normalise \r\n → \n so split always works
+                const parts = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');
+                const remainder = parts.pop() ?? '';
                 for (const part of parts) {
-                    // Each SSE chunk may have one or more "data: ..." lines
                     for (const raw of part.split('\n')) {
                         const line = raw.replace(/^data:\s*/, '').trim();
                         if (!line) continue;
@@ -117,10 +112,26 @@ export function streamSystemScan(
                         }
                     }
                 }
+                return remainder;
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                buffer = flushBuffer(buffer);
             }
+
+            // Process any trailing data left in the buffer
+            if (buffer.trim()) {
+                flushBuffer(buffer + '\n\n');
+            }
+
             onDone();
         } catch (err) {
-            if ((err as Error).name !== 'AbortError') {
+            if ((err as Error).name === 'AbortError') {
+                onDone();          // ensure streaming state is cleaned up
+            } else {
                 onError(err as Error);
             }
         }
@@ -343,30 +354,57 @@ export function streamIntentReasoning(
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let chunkIdx = 0;
+            const t0 = performance.now();
+            console.log('[SSE-DEBUG] stream opened', { url: `${API_BASE}/system-scan/stream`, t0 });
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const parts = buffer.split('\n\n');
-                buffer = parts.pop() ?? '';
-
+            const flushBuffer = (buf: string) => {
+                const parts = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');
+                const remainder = parts.pop() ?? '';
                 for (const part of parts) {
                     for (const raw of part.split('\n')) {
                         const line = raw.replace(/^data:\s*/, '').trim();
                         if (!line) continue;
                         try {
-                            onEvent(JSON.parse(line) as ReasoningStreamEvent);
+                            const parsed = JSON.parse(line) as ReasoningStreamEvent;
+                            console.log('[SSE-DEBUG] parsed event', {
+                                channel: (parsed as any).channel,
+                                type: parsed.type,
+                                elapsed: `${((performance.now() - t0) / 1000).toFixed(1)}s`,
+                                cell: (parsed as any).cell,
+                            });
+                            onEvent(parsed);
                         } catch {
                             /* skip malformed */
                         }
                     }
                 }
+                return remainder;
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const text = decoder.decode(value, { stream: true });
+                console.log(`[SSE-DEBUG] chunk #${chunkIdx++}`, {
+                    bytes: value.byteLength,
+                    elapsed: `${((performance.now() - t0) / 1000).toFixed(1)}s`,
+                    preview: text.slice(0, 120),
+                });
+                buffer += text;
+                buffer = flushBuffer(buffer);
             }
+
+            if (buffer.trim()) {
+                flushBuffer(buffer + '\n\n');
+            }
+
+            console.log('[SSE-DEBUG] stream ended', { elapsed: `${((performance.now() - t0) / 1000).toFixed(1)}s` });
             onDone();
         } catch (err) {
-            if ((err as Error).name !== 'AbortError') {
+            if ((err as Error).name === 'AbortError') {
+                onDone();
+            } else {
                 onError(err as Error);
             }
         }

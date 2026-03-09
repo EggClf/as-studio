@@ -255,11 +255,24 @@ export interface ReasoningCellDecisionEvent {
     explain_path: { featureName: string; condition: string; passed: boolean }[];
 }
 
+export interface ReasoningPlanFieldEvent {
+    channel: 'content';
+    type: 'plan_field';
+    task_type: string;
+    key: string;
+    value: {
+        file_path: string;
+        data: Record<string, number>[];
+        shape: number[];
+    };
+}
+
 export type ReasoningStreamEvent =
     | ReasoningProgressEvent
     | ReasoningCellContextEvent
     | ReasoningCellFeaturesEvent
-    | ReasoningCellDecisionEvent;
+    | ReasoningCellDecisionEvent
+    | ReasoningPlanFieldEvent;
 
 export interface CellReasoningData {
     context?: ReasoningCellContextEvent;
